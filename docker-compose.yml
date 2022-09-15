@@ -1,0 +1,21 @@
+version: "3.4"
+
+volumes:
+  caa-cache:
+
+services:
+
+  caa-grid:
+    build: .
+    volumes:
+      - caa-cache:/cache:z
+    restart: unless-stopped 
+    command: python cache.py
+    ports:
+      - "127.0.0.1:4200:8000"
+
+networks:
+  default:
+    name: musicbrainz-docker_default
+    external: true
+
