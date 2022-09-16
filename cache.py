@@ -22,8 +22,12 @@ class CoverArtCache:
     MIN_IMAGE_SIZE = 128
     MAX_IMAGE_SIZE = 1024
 
-    def __init__(self, cache_dir):
+    def __init__(self, cache_dir, dimension, image_size, background="#000000"):
         self.cache_dir = cache_dir
+        self.dimension = dimension
+        self.image_size = image_size
+        self.background = background
+        self.tile_size = image_size // dimension # This will likely need more cafeful thought due to round off errors
 
     def _cache_path(self, release_mbid):
         """ Given a release_mbid, create the file system path to where the cover art should be saved and 
@@ -111,39 +115,54 @@ class CoverArtCache:
 
         return cover_art_file
 
-    def create_grid(self, order, image_size, release_mbids):
-        """ Create a simple cover art grid. order specifies the number of images per axis,
-            image_file the destination image file and release_mbids the list
-            of release_mbids to use in the grid. """
 
-        if order not in (2, 3, 4, 5):
-            raise ValueError("Order must be between 2 and 5, inclusive.")
+    def calculate_bounding_box(self, address):
+        tiles = address.split(",")
+        try:
+            for i in range(len(tiles)):
+                tiles[i] = int(tiles[i].strip())
+        except ValueError:
+            return (None, None, None, None)
 
-        if image_size < self.MIN_IMAGE_SIZE or image_size > self.MAX_IMAGE_SIZE:
-            raise ValueError(f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive.")
+        for tile in tiles:
+            if tile < 0 or tile >= self.dimension:
+                return (None, None, None, None)
 
-        if image_size % order != 0:
-            raise ValueError(f"image size must be a multiple of image order.")
+        x1 = y1 = x2 = y2 = -1
+        for tile in tiles:
+            x, y = self.get_tile_position(tile)
+            if x1 < 0 or x < x1:
+                x1 = x
+            if y1 < 0 or y < y1:
+                y1 = y
+            if x2 < 0 or x > x2:
+                x2 = x
+            if y2 < 0 or y > y2:
+                y2 = y
 
-        tile_size = image_size // order
+        return (x1, y1, x2, y2)
 
-        composite = Image(height=image_size, width=image_size, background="#000000")
-        row = 0
-        col = 0
-        for mbid in release_mbids:
+
+
+    def get_tile_postion(self, tile):
+        """ Calculate the position of a given tile, return (x, y) """
+
+        if tile < 0 or tile >= self.dimenson * self.dimension:
+            return (None, None)
+
+        return (int(tile % dimension * tile_size), int(tile // dimension * tile_size))
+
+
+    def create_grid(self, tiles):
+        composite = Image(height=self.image_size, width=self.image_size, background=self.background)
+        for x1, y1, x2, y3, mbid in tiles:
             cover_art_file = self.fetch(mbid)
             if cover_art_file is None:
                 raise ValueError(f"Cover art not found for release_mbid {mbid}")
 
             cover = Image(filename=cover_art_file)
-            cover.resize(tile_size, tile_size)
-
-            composite.composite(left=col*tile_size, top=row*tile_size, image=cover)
-
-            col += 1
-            if col == order:
-                col = 0
-                row += 1
+            cover.resize(x2 - x1, y2 - y1)
+            composite.composite(left=x1, top=y1, image=cover)
 
         obj = io.BytesIO()
         composite.format = 'jpeg'
@@ -153,29 +172,20 @@ class CoverArtCache:
         return obj
 
 
-#cac = CoverArtCache("coverart")
-#cac.create_grid(2, 750, "image.jpg",
-#                ["76df3287-6cda-33eb-8e9a-044b5e15ffdd", "3a25785e-50ec-383c-89cf-fd512181449c",
-#                 "9db51cd6-38f6-3b42-8ad5-559963d68f35", "b2a820cc-c0ad-4aa3-a2a7-ed42ead88017"])
-
-
 app = Flask(__name__)
 
-@app.route("/coverart/grid/<int:order>/<int:image_size>/", methods=["GET"])
-def cover_art_grid(order, image_size):
+@app.route("/coverart/grid/<int:dimension>/<int:image_size>/", methods=["GET"])
+def cover_art_grid_get(dimension, image_size):
 
-    if order not in (2, 3, 4, 5):
-        raise BadRequest("Order must be between 2 and 5, inclusive.")
+    if dimension not in (2, 3, 4, 5):
+        raise BadRequest("dimension must be between 2 and 5, inclusive.")
 
     if image_size < CoverArtCache.MIN_IMAGE_SIZE or image_size > CoverArtCache.MAX_IMAGE_SIZE:
         raise BadRequest(f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive.")
 
-    if image_size % order != 0:
-        raise BadRequest(f"image size must be a multiple of image order.")
-
     mbids = request.args.get("release_mbids", "").split(",") 
-    if len(mbids) != order*order:
-        raise BadRequest(f"Incorrect number of release_mbids specifieid. For order {order} it should be {order*order}.")
+    if len(mbids) != dimension*dimension:
+        raise BadRequest(f"Incorrect number of release_mbids specifieid. For dimension {dimension} it should be {dimension*dimension}.")
 
     for mbid in mbids:
         try:
@@ -183,8 +193,61 @@ def cover_art_grid(order, image_size):
         except ValueError:
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
-    cac = CoverArtCache("/cache")
-    image = cac.create_grid(order, image_size, mbids) 
+    tiles = []
+    for addr, mbid in enumerate(mbids):
+        x1, y1, x2, y2 = self.calculate_bounding_box(addr):
+        if x1 is None:
+            raise BadRequest(f"Invalid address {addr} specified.")
+        tiles.append((x1, y1, x2, y2, mbid))
+
+    cac = CoverArtCache("/cache", dimension, image_size)
+    image = cac.create_grid(tiles)
+    if image is None:
+        raise BadRequest("Was not able to load all specified images.")
+
+    return Response(response=image, status=200, mimetype="image/jpeg")
+
+
+@app.route("/coverart/grid/", methods=["POST"])
+def cover_art_grid_post():
+
+    r = request.json()
+    dimension = r["dimension"]
+    image_size = r["image_size"]
+    background = r["background"]
+    mbids = r["tiles"]
+
+    if dimension not in (2, 3, 4, 5):
+        raise BadRequest("dimmension must be between 2 and 5, inclusive.")
+
+    if image_size < CoverArtCache.MIN_IMAGE_SIZE or image_size > CoverArtCache.MAX_IMAGE_SIZE:
+        raise BadRequest(f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive.")
+
+    # Check to see if we are making a simple grid or a complex one
+    if type(mbids[0]) == str:
+        for mbid in mbids:
+            try:
+                UUID(mbid)
+            except ValueError:
+                raise BadRequest(f"Invalid release_mbid {mbid} specified.")
+
+        image = self.create_simple_grid(mbids)
+        if image is None:
+            raise BadRequest("Was not able to load all specified images.")
+
+    if type(mbids[0]) == list:
+        raise BadRequest("tiles must be a list of lists or a list of release_mbids")
+
+    # Yes, this is complex grid!
+    tiles = []
+    for addr, mbid in mbids:
+        x1, y1, x2, y2 = self.calculate_bounding_box(addr):
+        if x1 is None:
+            raise BadRequest(f"Invalid address {addr} specified.")
+        tiles.append((x1, y1, x2, y2, mbid))
+            
+    cac = CoverArtCache("/cache", dimension, image_size, background)
+    image = cac.create_grid(tiles)
     if image is None:
         raise BadRequest("Was not able to load all specified images.")
 
