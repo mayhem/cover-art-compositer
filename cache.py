@@ -125,40 +125,50 @@ class CoverArtCache:
             return (None, None, None, None)
 
         for tile in tiles:
-            if tile < 0 or tile >= self.dimension:
+            if tile < 0 or tile >= (self.dimension*self.dimension):
                 return (None, None, None, None)
 
-        x1 = y1 = x2 = y2 = -1
-        for tile in tiles:
-            x, y = self.get_tile_position(tile)
-            if x1 < 0 or x < x1:
-                x1 = x
-            if y1 < 0 or y < y1:
-                y1 = y
-            if x2 < 0 or x > x2:
-                x2 = x
-            if y2 < 0 or y > y2:
-                y2 = y
+        for i, tile in enumerate(tiles):
+            x1, y1 = self.get_tile_position(tile)
+            x2 = x1 + self.tile_size
+            y2 = y1 + self.tile_size
 
-        return (x1, y1, x2, y2)
+            if i == 0:
+                bb_x1 = x1
+                bb_y1 = y1
+                bb_x2 = x2
+                bb_y2 = y2
+                continue
+
+            bb_x1 = min(bb_x1, x1)
+            bb_y1 = min(bb_y1, y1)
+            bb_x1 = min(bb_x1, x2)
+            bb_y1 = min(bb_y1, y2)
+            bb_x2 = max(bb_x2, x1)
+            bb_y2 = max(bb_y2, y1)
+            bb_x2 = max(bb_x2, x2)
+            bb_y2 = max(bb_y2, y2)
+
+        return (bb_x1, bb_y1, bb_x2, bb_y2)
 
 
 
-    def get_tile_postion(self, tile):
+    def get_tile_position(self, tile):
         """ Calculate the position of a given tile, return (x, y) """
 
-        if tile < 0 or tile >= self.dimenson * self.dimension:
+        if tile < 0 or tile >= self.dimension * self.dimension:
             return (None, None)
 
-        return (int(tile % dimension * tile_size), int(tile // dimension * tile_size))
+        return (int(tile % self.dimension * self.tile_size), int(tile // self.dimension * self.tile_size))
 
 
     def create_grid(self, tiles):
         composite = Image(height=self.image_size, width=self.image_size, background=self.background)
-        for x1, y1, x2, y3, mbid in tiles:
+        for x1, y1, x2, y2, mbid in tiles:
             cover_art_file = self.fetch(mbid)
             if cover_art_file is None:
-                raise ValueError(f"Cover art not found for release_mbid {mbid}")
+                print(f"Cound not fetch cover art for {mbid}")
+                continue
 
             cover = Image(filename=cover_art_file)
             cover.resize(x2 - x1, y2 - y1)
@@ -193,14 +203,14 @@ def cover_art_grid_get(dimension, image_size):
         except ValueError:
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
+    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size)
     tiles = []
     for addr, mbid in enumerate(mbids):
-        x1, y1, x2, y2 = self.calculate_bounding_box(addr):
+        x1, y1 = cac.get_tile_position(addr)
         if x1 is None:
             raise BadRequest(f"Invalid address {addr} specified.")
-        tiles.append((x1, y1, x2, y2, mbid))
+        tiles.append((x1, y1, x1 + cac.tile_size, y1 + cac.tile_size, mbid))
 
-    cac = CoverArtCache("/cache", dimension, image_size)
     image = cac.create_grid(tiles)
     if image is None:
         raise BadRequest("Was not able to load all specified images.")
@@ -211,11 +221,12 @@ def cover_art_grid_get(dimension, image_size):
 @app.route("/coverart/grid/", methods=["POST"])
 def cover_art_grid_post():
 
-    r = request.json()
+    r = request.json
     dimension = r["dimension"]
     image_size = r["image_size"]
     background = r["background"]
     mbids = r["tiles"]
+    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size, background)
 
     if dimension not in (2, 3, 4, 5):
         raise BadRequest("dimmension must be between 2 and 5, inclusive.")
@@ -231,22 +242,21 @@ def cover_art_grid_post():
             except ValueError:
                 raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
-        image = self.create_simple_grid(mbids)
+        image = cac.create_simple_grid(mbids)
         if image is None:
             raise BadRequest("Was not able to load all specified images.")
 
-    if type(mbids[0]) == list:
+    if type(mbids[0]) not in (list, tuple):
         raise BadRequest("tiles must be a list of lists or a list of release_mbids")
 
     # Yes, this is complex grid!
     tiles = []
     for addr, mbid in mbids:
-        x1, y1, x2, y2 = self.calculate_bounding_box(addr):
+        x1, y1, x2, y2 = cac.calculate_bounding_box(addr)
         if x1 is None:
             raise BadRequest(f"Invalid address {addr} specified.")
         tiles.append((x1, y1, x2, y2, mbid))
             
-    cac = CoverArtCache("/cache", dimension, image_size, background)
     image = cac.create_grid(tiles)
     if image is None:
         raise BadRequest("Was not able to load all specified images.")
@@ -254,4 +264,4 @@ def cover_art_grid_post():
     return Response(response=image, status=200, mimetype="image/jpeg")
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=8000)
+    app.run(host="0.0.0.0", port=8000, debug=True)
