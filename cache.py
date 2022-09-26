@@ -220,8 +220,8 @@ class CoverArtCache:
             match self.missing_art:
                 case "caa-image":
                     jpg_obj = self._download_file(self.CAA_MISSING_IMAGE)
-                    self.missing_cover_art_tile = Image(fileobj=jpg_obj)
-                    self.missing_cover_art_tile.resize(x2 - x1, y2 - y1)
+                    self.missing_cover_art_tile = Image(file=jpg_obj)
+                    self.missing_cover_art_tile.resize(self.tile_size, self.tile_size)
                 case "background":
                     self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size)
                 case "white":
@@ -232,19 +232,20 @@ class CoverArtCache:
         return self.missing_cover_art_tile
 
 
-    def create_grid(self, mbids, tiles):
+    def create_grid(self, mbids, tiles, addrs):
         composite = Image(height=self.image_size, width=self.image_size, background=self.background)
-        print(tiles)
+        i = 0
         for x1, y1, x2, y2 in tiles:
+            i += 1
             while True:
                 try:
-                    mbid = mbids.pop()
+                    mbid = mbids.pop(0)
                 except IndexError:
                     cover_art = self.load_or_create_missing_cover_art_tile()
 
                 cover_art = self.fetch(mbid)
                 if cover_art is None:
-                    current_app.logger.info(f"Cound not fetch cover art for {mbid}")
+                    print(f"Cound not fetch cover art for {mbid}")
                     if self.skip_missing:
                         continue
 
@@ -256,7 +257,7 @@ class CoverArtCache:
                 cover = Image(filename=cover_art)
                 cover.resize(x2 - x1, y2 - y1)
             else:
-                cover = cover_art_file
+                cover = cover_art
 
             composite.composite(left=x1, top=y1, image=cover)
 
@@ -300,7 +301,7 @@ def cover_art_grid_post():
             raise BadRequest(f"Invalid address {addr} specified.")
         tiles.append((x1, y1, x2, y2))
 
-    image = cac.create_grid(r["release_mbids"], tiles)
+    image = cac.create_grid(r["release_mbids"], tiles, addrs)
     if image is None:
         raise InternalServerError("Failed to create composite image.")
 
