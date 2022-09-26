@@ -1,9 +1,9 @@
 {
-	"background": "#000000",
+	"background": "white",
 	"image_size": 1000,
 	"dimension": 4,
-        "skip-missing": true,
-        "missing-art": "caa-image",
+        "skip-missing": false,
+        "missing-art": "background",
 	"tiles": [
 		"0,1,4,5",
 		"10,11,14,15",
@@ -19,6 +19,7 @@
 	"release_mbids": [
 		"d101e395-0c04-4237-a3d2-167b1d88056c",
 		"4211382c-39e8-4a72-a32d-e4046fd96356",
+                "6d895dfa-8688-4867-9730-2b98050dae04",
 		"773e54bb-3f43-4813-826c-ca762bfa8318",
 		"ec782dbe-9204-4ec3-bf50-576c7cf3dfb3",
 		"dbd1adf7-bb3a-47cd-83df-b3fc609b0e86",
