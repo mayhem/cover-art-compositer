@@ -12,7 +12,7 @@ from psycopg2.errors import OperationalError
 import requests
 from wand.image import Image
 from wand.drawing import Drawing
-from werkzeug.exceptions import BadRequest, ServerError
+from werkzeug.exceptions import BadRequest, InternalServerError
 
 import config
 
@@ -21,19 +21,20 @@ class CoverArtCache:
 
     MIN_IMAGE_SIZE = 128
     MAX_IMAGE_SIZE = 1024
+    CAA_MISSING_IMAGE = "https://listenbrainz.org/static/img/cover-art-placeholder.jpg"
 
-    def __init__(self, cache_dir, dimension, image_size, background="#000000"):
+    def __init__(self, cache_dir, dimension, image_size, background="#000000", skip_missing=True, missing_art="caa-image"):
         self.cache_dir = cache_dir
         self.dimension = dimension
         self.image_size = image_size
         self.background = background
-        self.skip_missing = self.skip_missing
+        self.skip_missing = skip_missing
         self.missing_art = missing_art
         self.missing_cover_art_tile = None
 
         bg_color = self._parse_color_code(background)
-        if background not in ("transparent", "white", "black") and pg_color is not None:
-            raise BadRequest("background must be one of transparent, white, black or a color code: #rrggbb")
+        if background not in ("transparent", "white", "black") and bg_color is None:
+            raise BadRequest(f"background must be one of transparent, white, black or a color code #rrggbb, not {background}")
 
         if dimension not in (2, 3, 4, 5):
             raise BadRequest("dimmension must be between 2 and 5, inclusive.")
@@ -44,8 +45,8 @@ class CoverArtCache:
         if not isinstance(self.skip_missing, bool):
             raise BadRequest(f"option skip-missing must be of type boolean.")
 
-        if missing_art not in ("caa-icon", "background", "white", "black"):
-            raise BadRequest("missing-art option mus be one of caa-icon, background, white or black.")
+        if missing_art not in ("caa-image", "background", "white", "black"):
+            raise BadRequest("missing-art option must be one of caa-image, background, white or black.")
 
         self.tile_size = image_size // dimension # This will likely need more cafeful thought due to round off errors
 
@@ -102,34 +103,29 @@ class CoverArtCache:
                 else:
                     return None
 
-    def _download_cover_art(self, release_mbid, cover_art_file):
-        """ The cover art for the given release mbid does not exist, so download it,
-            save a local copy of it. """
-
-        caa_id = self._get_caa_id(release_mbid)
-        if caa_id is None:
-            return False
+    def _download_file(self, url):
+        """ Download a file given a URL and return that file as file-like object. """
 
         sleep_duration = 2
         while True:
             headers = {'User-Agent': 'ListenBrainz Cover Art Compositor ( rob@metabrainz.org )'}
-            url = f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
             r = requests.get(url, headers=headers)
             if r.status_code == 200:
-                with open(cover_art_file, 'wb') as f:
-                    for chunk in r:
-                        f.write(chunk)
-                return True
+                obj = io.BytesIO()
+                for chunk in r:
+                    obj.write(chunk)
+                obj.seek(0, 0)
+                return obj
 
             if r.status_code in [403, 404]:
-                return False
+                return None
 
             if r.status_code == 429:
                 log("Exceeded rate limit. sleeping %d seconds." % sleep_duration)
                 sleep(sleep_duration)
                 sleep_duration *= 2
                 if sleep_duration > 100:
-                    return False
+                    return None
 
                 continue
 
@@ -138,11 +134,29 @@ class CoverArtCache:
                 sleep(sleep_duration)
                 sleep_duration *= 2
                 if sleep_duration > 100:
-                    return False
+                    return None
                 continue
 
             log("Unhandled %d" % r.status_code)
+            return None
+
+    def _download_cover_art(self, release_mbid, cover_art_file):
+        """ The cover art for the given release mbid does not exist, so download it,
+            save a local copy of it. """
+
+        caa_id = self._get_caa_id(release_mbid)
+        if caa_id is None:
             return False
+
+        url = f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
+        image = self._download_file(url)
+        if image is None:
+            return False
+
+        with open(cover_art_file, 'wb') as f:
+            f.write(image.read())
+
+        return True
 
     def fetch(self, release_mbid):
         """ Fetch the cover art for the given release_mbid and return a path to where the image
@@ -204,8 +218,10 @@ class CoverArtCache:
     def load_or_create_missing_cover_art_tile(self):
         if self.missing_cover_art_tile is None:
             match self.missing_art:
-                case "caa-icon":
-                     # load listenbrainz/webserver/static/img/cover-art-placeholder.jpg
+                case "caa-image":
+                    jpg_obj = self._download_file(self.CAA_MISSING_IMAGE)
+                    self.missing_cover_art_tile = Image(fileobj=jpg_obj)
+                    self.missing_cover_art_tile.resize(x2 - x1, y2 - y1)
                 case "background":
                     self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size)
                 case "white":
@@ -218,6 +234,7 @@ class CoverArtCache:
 
     def create_grid(self, mbids, tiles):
         composite = Image(height=self.image_size, width=self.image_size, background=self.background)
+        print(tiles)
         for x1, y1, x2, y2 in tiles:
             while True:
                 try:
@@ -270,21 +287,22 @@ def cover_art_grid_post():
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
     if "tiles" not in r:
-        tiles = range(self.dimension * self.dimension)
+        addrs = ["%d" % i for i in range(self.dimension * self.dimension)]
+    elif not isinstance(r["tiles"], list):
+        raise BadRequest(f"tiles must specify a list of tile addresses.")
     else:
-        if not isinstance(r["tiles"], list):
+        addrs = r["tiles"]
 
     tiles = []
-    for addr, mbid in mbids:
+    for addr in addrs:
         x1, y1, x2, y2 = cac.calculate_bounding_box(addr)
         if x1 is None:
             raise BadRequest(f"Invalid address {addr} specified.")
-        tiles.append((x1, y1, x2, y2, mbid))
+        tiles.append((x1, y1, x2, y2))
 
-
-    image = cac.create_grid(mbids, tiles)
+    image = cac.create_grid(r["release_mbids"], tiles)
     if image is None:
-        raise ServerError("Failed to create composite image.")
+        raise InternalServerError("Failed to create composite image.")
 
     return Response(response=image, status=200, mimetype="image/jpeg")
 
