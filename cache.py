@@ -12,7 +12,7 @@ from psycopg2.errors import OperationalError
 import requests
 from wand.image import Image
 from wand.drawing import Drawing
-from werkzeug.exceptions import BadRequest
+from werkzeug.exceptions import BadRequest, ServerError
 
 import config
 
@@ -27,7 +27,48 @@ class CoverArtCache:
         self.dimension = dimension
         self.image_size = image_size
         self.background = background
+        self.skip_missing = self.skip_missing
+        self.missing_art = missing_art
+        self.missing_cover_art_tile = None
+
+        bg_color = self._parse_color_code(background)
+        if background not in ("transparent", "white", "black") and pg_color is not None:
+            raise BadRequest("background must be one of transparent, white, black or a color code: #rrggbb")
+
+        if dimension not in (2, 3, 4, 5):
+            raise BadRequest("dimmension must be between 2 and 5, inclusive.")
+
+        if image_size < CoverArtCache.MIN_IMAGE_SIZE or image_size > CoverArtCache.MAX_IMAGE_SIZE:
+            raise BadRequest(f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive.")
+
+        if not isinstance(self.skip_missing, bool):
+            raise BadRequest(f"option skip-missing must be of type boolean.")
+
+        if missing_art not in ("caa-icon", "background", "white", "black"):
+            raise BadRequest("missing-art option mus be one of caa-icon, background, white or black.")
+
         self.tile_size = image_size // dimension # This will likely need more cafeful thought due to round off errors
+
+    def _parse_color_code(self, color_code):
+        if not color_code.startswith("#"):
+            return None
+
+        try:
+            r = int(color_code[1:3], 16)
+        except ValueError:
+            return None
+
+        try:
+            g = int(color_code[3:5], 16)
+        except ValueError:
+            return None
+
+        try:
+            b = int(color_code[5:7], 16)
+        except ValueError:
+            return None
+
+        return (r, g, b)
 
     def _cache_path(self, release_mbid):
         """ Given a release_mbid, create the file system path to where the cover art should be saved and 
@@ -152,7 +193,6 @@ class CoverArtCache:
         return (bb_x1, bb_y1, bb_x2, bb_y2)
 
 
-
     def get_tile_position(self, tile):
         """ Calculate the position of a given tile, return (x, y) """
 
@@ -161,17 +201,46 @@ class CoverArtCache:
 
         return (int(tile % self.dimension * self.tile_size), int(tile // self.dimension * self.tile_size))
 
+    def load_or_create_missing_cover_art_tile(self):
+        if self.missing_cover_art_tile is None:
+            match self.missing_art:
+                case "caa-icon":
+                     # load listenbrainz/webserver/static/img/cover-art-placeholder.jpg
+                case "background":
+                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size)
+                case "white":
+                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, bg="white")
+                case "black":
+                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, bg="black")
 
-    def create_grid(self, tiles):
+        return self.missing_cover_art_tile
+
+
+    def create_grid(self, mbids, tiles):
         composite = Image(height=self.image_size, width=self.image_size, background=self.background)
-        for x1, y1, x2, y2, mbid in tiles:
-            cover_art_file = self.fetch(mbid)
-            if cover_art_file is None:
-                print(f"Cound not fetch cover art for {mbid}")
-                continue
+        for x1, y1, x2, y2 in tiles:
+            while True:
+                try:
+                    mbid = mbids.pop()
+                except IndexError:
+                    cover_art = self.load_or_create_missing_cover_art_tile()
 
-            cover = Image(filename=cover_art_file)
-            cover.resize(x2 - x1, y2 - y1)
+                cover_art = self.fetch(mbid)
+                if cover_art is None:
+                    current_app.logger.info(f"Cound not fetch cover art for {mbid}")
+                    if self.skip_missing:
+                        continue
+
+                    cover_art = self.load_or_create_missing_cover_art_tile()
+                break
+
+            # Check to see if we have a string with a filename or loaded/prepped image (for missing images)
+            if isinstance(cover_art, str):
+                cover = Image(filename=cover_art)
+                cover.resize(x2 - x1, y2 - y1)
+            else:
+                cover = cover_art_file
+
             composite.composite(left=x1, top=y1, image=cover)
 
         obj = io.BytesIO()
@@ -184,82 +253,38 @@ class CoverArtCache:
 
 app = Flask(__name__)
 
-@app.route("/coverart/grid/<int:dimension>/<int:image_size>/", methods=["GET"])
-def cover_art_grid_get(dimension, image_size):
+@app.route("/coverart/grid/", methods=["POST"])
+def cover_art_grid_post():
 
-    if dimension not in (2, 3, 4, 5):
-        raise BadRequest("dimension must be between 2 and 5, inclusive.")
+    r = request.json
+    cac = CoverArtCache(config.CACHE_DIR, r["dimension"], r["image_size"],
+                        r["background"], r["skip-missing"], r["missing-art"])
 
-    if image_size < CoverArtCache.MIN_IMAGE_SIZE or image_size > CoverArtCache.MAX_IMAGE_SIZE:
-        raise BadRequest(f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive.")
+    if not isinstance(r["release_mbids"], list):
+        raise BadRequest("release_mbids must be a list of strings specifying release_mbids")
 
-    mbids = request.args.get("release_mbids", "").split(",") 
-    if len(mbids) != dimension*dimension:
-        raise BadRequest(f"Incorrect number of release_mbids specifieid. For dimension {dimension} it should be {dimension*dimension}.")
-
-    for mbid in mbids:
+    for mbid in r["release_mbids"]:
         try:
             UUID(mbid)
         except ValueError:
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
-    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size)
-    tiles = []
-    for addr, mbid in enumerate(mbids):
-        x1, y1 = cac.get_tile_position(addr)
-        if x1 is None:
-            raise BadRequest(f"Invalid address {addr} specified.")
-        tiles.append((x1, y1, x1 + cac.tile_size, y1 + cac.tile_size, mbid))
+    if "tiles" not in r:
+        tiles = range(self.dimension * self.dimension)
+    else:
+        if not isinstance(r["tiles"], list):
 
-    image = cac.create_grid(tiles)
-    if image is None:
-        raise BadRequest("Was not able to load all specified images.")
-
-    return Response(response=image, status=200, mimetype="image/jpeg")
-
-
-@app.route("/coverart/grid/", methods=["POST"])
-def cover_art_grid_post():
-
-    r = request.json
-    dimension = r["dimension"]
-    image_size = r["image_size"]
-    background = r["background"]
-    mbids = r["tiles"]
-    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size, background)
-
-    if dimension not in (2, 3, 4, 5):
-        raise BadRequest("dimmension must be between 2 and 5, inclusive.")
-
-    if image_size < CoverArtCache.MIN_IMAGE_SIZE or image_size > CoverArtCache.MAX_IMAGE_SIZE:
-        raise BadRequest(f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive.")
-
-    # Check to see if we are making a simple grid or a complex one
-    if type(mbids[0]) == str:
-        for mbid in mbids:
-            try:
-                UUID(mbid)
-            except ValueError:
-                raise BadRequest(f"Invalid release_mbid {mbid} specified.")
-
-        image = cac.create_simple_grid(mbids)
-        if image is None:
-            raise BadRequest("Was not able to load all specified images.")
-
-    if type(mbids[0]) not in (list, tuple):
-        raise BadRequest("tiles must be a list of lists or a list of release_mbids")
-
-    # Yes, this is complex grid!
     tiles = []
     for addr, mbid in mbids:
         x1, y1, x2, y2 = cac.calculate_bounding_box(addr)
         if x1 is None:
             raise BadRequest(f"Invalid address {addr} specified.")
         tiles.append((x1, y1, x2, y2, mbid))
-            
-    image = cac.create_grid(tiles)
+
+
+    image = cac.create_grid(mbids, tiles)
     if image is None:
-        raise BadRequest("Was not able to load all specified images.")
+        raise ServerError("Failed to create composite image.")
 
     return Response(response=image, status=200, mimetype="image/jpeg")
 
