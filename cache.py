@@ -32,6 +32,7 @@ class CoverArtCache:
         self.missing_art = missing_art
         self.missing_cover_art_tile = None
 
+        # Hmm. raising web exceptions in this class is less than ideal. cleanup
         bg_color = self._parse_color_code(background)
         if background not in ("transparent", "white", "black") and bg_color is None:
             raise BadRequest(f"background must be one of transparent, white, black or a color code #rrggbb, not {background}")
@@ -225,14 +226,14 @@ class CoverArtCache:
                 case "background":
                     self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size)
                 case "white":
-                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, bg="white")
+                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, background="white")
                 case "black":
-                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, bg="black")
+                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, background="black")
 
         return self.missing_cover_art_tile
 
 
-    def create_grid(self, mbids, tiles, addrs):
+    def create_grid(self, mbids, tiles):
         composite = Image(height=self.image_size, width=self.image_size, background=self.background)
         i = 0
         for x1, y1, x2, y2 in tiles:
@@ -301,7 +302,53 @@ def cover_art_grid_post():
             raise BadRequest(f"Invalid address {addr} specified.")
         tiles.append((x1, y1, x2, y2))
 
-    image = cac.create_grid(r["release_mbids"], tiles, addrs)
+    image = cac.create_grid(r["release_mbids"], tiles)
+    if image is None:
+        raise InternalServerError("Failed to create composite image.")
+
+    return Response(response=image, status=200, mimetype="image/jpeg")
+
+def download_user_stats(user_name, date_range):
+
+    if date_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time', 'this_week', 'this_month', 'this_year']:
+        raise BadRequest("Invalid date range given.")
+
+    url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/releases"
+    r = requests.get(url, { "range": date_range, "count": 100 })
+    if r.status_code != 200:
+        raise BadRequest("Fetching stats for user {user_name} failed: %d" % r.status_code)
+
+    data = r.json()
+    mbids = []
+    for d in data["payload"]["releases"]:
+        if d["release_mbid"] is not None:
+            mbids.append(d["release_mbid"])
+
+    return mbids
+
+
+TILE_DESIGNS = {
+    3: ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+    4: ["0,1,4,5", "10,11,14,15", "2", "3", "6", "7", "8", "9", "12", "13"],
+    5: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
+}
+
+@app.route("/coverart/grid-stats/<user_name>/<range>/<int:dimension>/<int:image_size>", methods=["GET"])
+def cover_art_grid_stats(user_name, range, dimension, image_size):
+
+    release_mbids = download_user_stats(user_name, range)
+    if len(release_mbids) == 0:
+        raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
+
+    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size, "black", True, "black")
+    tiles = []
+    for addr in TILE_DESIGNS[dimension]:
+        x1, y1, x2, y2 = cac.calculate_bounding_box(addr)
+        if x1 is None:
+            raise BadRequest(f"Invalid address {addr} specified.")
+        tiles.append((x1, y1, x2, y2))
+
+    image = cac.create_grid(release_mbids, tiles)
     if image is None:
         raise InternalServerError("Failed to create composite image.")
 
