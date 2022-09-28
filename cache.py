@@ -16,6 +16,28 @@ from werkzeug.exceptions import BadRequest, InternalServerError
 
 import config
 
+# Dimension 2:
+# 0  1
+# 2  3
+#
+# Dimension 3:
+# 0  1  2
+# 3  4  5
+# 6  7  8
+#
+# Dimension 4:
+# 0   1  2  3
+# 4   5  6  7
+# 8   9 10 11
+# 12 13 14 15
+#
+# Dimension 5:
+# 0   1  2  3  4
+# 5   6  7  8  9
+# 10 11 12 13 14
+# 15 16 17 18 19
+# 20 21 22 23 24
+
 
 class CoverArtCache:
 
@@ -23,7 +45,30 @@ class CoverArtCache:
     MAX_IMAGE_SIZE = 1024
     CAA_MISSING_IMAGE = "https://listenbrainz.org/static/img/cover-art-placeholder.jpg"
 
-    def __init__(self, cache_dir, dimension, image_size, background="#000000", skip_missing=True, missing_art="caa-image"):
+    TILE_DESIGNS = {
+        2: [
+                ["0", "1", "2", "3"],
+           ],
+        3: [
+                ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+                ["0,1,3,4", "2", "5", "6", "7", "8"],
+                ["0", "1", "2", "3", "4,5,7,8", "6"],
+           ],
+        4: [
+                ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"],
+                ["5,6,9,10", "0", "1", "2", "3", "4", "7", "8", "11", "12", "13", "14", "15"],
+                ["0,1,4,5", "10,11,14,15", "2", "3", "6", "7", "8", "9", "12", "13"],
+                ["0,1,2,4,5,6,8,9,10", "3", "7", "11", "12", "13", "14", "15"],
+           ],
+        5: [    
+                ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
+                 "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"],
+                ["0,1,2,5,6,7,10,11,12", "3,4,8,9", "15,16,20,21", "13", "14", "17", "18", "19", "22", "23", "24"]
+           ]
+    }
+
+    def __init__(self, cache_dir, dimension, image_size, background="#000000",
+                 skip_missing=True, missing_art="caa-image", layout=None):
         self.cache_dir = cache_dir
         self.dimension = dimension
         self.image_size = image_size
@@ -31,25 +76,36 @@ class CoverArtCache:
         self.skip_missing = skip_missing
         self.missing_art = missing_art
         self.missing_cover_art_tile = None
+        self.layout = layout
+        self.tile_size = image_size // dimension # This will likely need more cafeful thought due to round off errors
 
-        # Hmm. raising web exceptions in this class is less than ideal. cleanup
-        bg_color = self._parse_color_code(background)
-        if background not in ("transparent", "white", "black") and bg_color is None:
-            raise BadRequest(f"background must be one of transparent, white, black or a color code #rrggbb, not {background}")
+    def validate_parameters(self):
+        """ Validate the parameters for the cover art designs. """
 
-        if dimension not in (2, 3, 4, 5):
-            raise BadRequest("dimmension must be between 2 and 5, inclusive.")
+        if self.dimension not in (2, 3, 4, 5):
+            return "dimmension must be between 2 and 5, inclusive."
 
-        if image_size < CoverArtCache.MIN_IMAGE_SIZE or image_size > CoverArtCache.MAX_IMAGE_SIZE:
-            raise BadRequest(f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive.")
+        if self.layout is not None:
+            try:
+                _ = self.TILE_DESIGNS[self.dimension][self.layout]
+            except IndexError:
+                return f"layout {self.layout} is not available for dimension {self.dimension}."
+
+        bg_color = self._parse_color_code(self.background)
+        if self.background not in ("transparent", "white", "black") and bg_color is None:
+            return f"background must be one of transparent, white, black or a color code #rrggbb, not {self.background}"
+
+        if self.image_size < CoverArtCache.MIN_IMAGE_SIZE or self.image_size > CoverArtCache.MAX_IMAGE_SIZE:
+            return f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive."
 
         if not isinstance(self.skip_missing, bool):
-            raise BadRequest(f"option skip-missing must be of type boolean.")
+            return f"option skip-missing must be of type boolean."
 
-        if missing_art not in ("caa-image", "background", "white", "black"):
-            raise BadRequest("missing-art option must be one of caa-image, background, white or black.")
+        if self.missing_art not in ("caa-image", "background", "white", "black"):
+            return "missing-art option must be one of caa-image, background, white or black."
 
-        self.tile_size = image_size // dimension # This will likely need more cafeful thought due to round off errors
+        return None
+
 
     def _parse_color_code(self, color_code):
         if not color_code.startswith("#"):
@@ -112,21 +168,24 @@ class CoverArtCache:
             headers = {'User-Agent': 'ListenBrainz Cover Art Compositor ( rob@metabrainz.org )'}
             r = requests.get(url, headers=headers)
             if r.status_code == 200:
+                total = 0
                 obj = io.BytesIO()
                 for chunk in r:
+                    total += len(chunk)
                     obj.write(chunk)
                 obj.seek(0, 0)
-                return obj
+                print("Loaded %d bytes" % total)
+                return obj, ""
 
             if r.status_code in [403, 404]:
-                return None
+                return None, f"Could not load resource: {r.status_code}."
 
             if r.status_code == 429:
                 log("Exceeded rate limit. sleeping %d seconds." % sleep_duration)
                 sleep(sleep_duration)
                 sleep_duration *= 2
                 if sleep_duration > 100:
-                    return None
+                    return None, "Timeout loading image, due to 429"
 
                 continue
 
@@ -135,11 +194,10 @@ class CoverArtCache:
                 sleep(sleep_duration)
                 sleep_duration *= 2
                 if sleep_duration > 100:
-                    return None
+                    return None, "Timeout loading image, 503"
                 continue
 
-            log("Unhandled %d" % r.status_code)
-            return None
+            return None, "Unhandled status code: %d" % r.status_code
 
     def _download_cover_art(self, release_mbid, cover_art_file):
         """ The cover art for the given release mbid does not exist, so download it,
@@ -147,17 +205,20 @@ class CoverArtCache:
 
         caa_id = self._get_caa_id(release_mbid)
         if caa_id is None:
-            return False
+            return "Could not find caa_id"
 
         url = f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
-        image = self._download_file(url)
+        print(url)
+        image, err = self._download_file(url)
         if image is None:
-            return False
+            print("Case 1");
+            return err
 
         with open(cover_art_file, 'wb') as f:
             f.write(image.read())
 
-        return True
+        print("Case 2");
+        return None
 
     def fetch(self, release_mbid):
         """ Fetch the cover art for the given release_mbid and return a path to where the image
@@ -166,10 +227,12 @@ class CoverArtCache:
 
         cover_art_file = self._cache_path(release_mbid)
         if not os.path.exists(cover_art_file):
-            if not self._download_cover_art(release_mbid, cover_art_file):
-                return None
+            err = self._download_cover_art(release_mbid, cover_art_file)
+            print("Fetch", err)
+            if err is not None:
+                return None, err
 
-        return cover_art_file
+        return cover_art_file, ""
 
 
     def calculate_bounding_box(self, address):
@@ -233,8 +296,23 @@ class CoverArtCache:
         return self.missing_cover_art_tile
 
 
-    def create_grid(self, mbids, tiles):
+    def create_grid(self, mbids, tile_addrs=None):
+
         composite = Image(height=self.image_size, width=self.image_size, background=self.background)
+        if self.layout is not None:
+            addrs = self.TILE_DESIGNS[self.dimension][self.layout]
+        elif tile_addrs is None:
+            addrs = self.TILE_DESIGNS[self.dimension][0]
+        else:
+            addrs = tile_addrs
+
+        tiles = []
+        for addr in addrs:
+            x1, y1, x2, y2 = self.calculate_bounding_box(addr)
+            if x1 is None:
+                raise BadRequest(f"Invalid address {addr} specified.")
+            tiles.append((x1, y1, x2, y2))
+
         i = 0
         for x1, y1, x2, y2 in tiles:
             i += 1
@@ -244,10 +322,11 @@ class CoverArtCache:
                 except IndexError:
                     cover_art = self.load_or_create_missing_cover_art_tile()
 
-                cover_art = self.fetch(mbid)
+                cover_art, err = self.fetch(mbid)
                 if cover_art is None:
-                    print(f"Cound not fetch cover art for {mbid}")
+                    print(f"Could not fetch cover art for {mbid}: {err}")
                     if self.skip_missing:
+                        print("Skip nmissing and try again")
                         continue
 
                     cover_art = self.load_or_create_missing_cover_art_tile()
@@ -276,8 +355,23 @@ app = Flask(__name__)
 def cover_art_grid_post():
 
     r = request.json
-    cac = CoverArtCache(config.CACHE_DIR, r["dimension"], r["image_size"],
-                        r["background"], r["skip-missing"], r["missing-art"])
+
+    if "tiles" in r:
+        cac = CoverArtCache(config.CACHE_DIR, r["dimension"], r["image_size"],
+                            r["background"], r["skip-missing"], r["missing-art"])
+        tiles = r["tiles"]
+    else:
+        if "layout" in r:
+            layout = r["layout"]
+        else:
+            layout = 0
+        cac = CoverArtCache(config.CACHE_DIR, r["dimension"], r["image_size"],
+                            r["background"], r["skip-missing"], r["missing-art"], r["layout"])
+        tiles = None
+
+    err = cac.validate_parameters()
+    if err is not None:
+        raise BadRequest(err)
 
     if not isinstance(r["release_mbids"], list):
         raise BadRequest("release_mbids must be a list of strings specifying release_mbids")
@@ -287,20 +381,6 @@ def cover_art_grid_post():
             UUID(mbid)
         except ValueError:
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
-
-    if "tiles" not in r:
-        addrs = ["%d" % i for i in range(self.dimension * self.dimension)]
-    elif not isinstance(r["tiles"], list):
-        raise BadRequest(f"tiles must specify a list of tile addresses.")
-    else:
-        addrs = r["tiles"]
-
-    tiles = []
-    for addr in addrs:
-        x1, y1, x2, y2 = cac.calculate_bounding_box(addr)
-        if x1 is None:
-            raise BadRequest(f"Invalid address {addr} specified.")
-        tiles.append((x1, y1, x2, y2))
 
     image = cac.create_grid(r["release_mbids"], tiles)
     if image is None:
@@ -327,28 +407,19 @@ def download_user_stats(user_name, date_range):
     return mbids
 
 
-TILE_DESIGNS = {
-    3: ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
-    4: ["0,1,4,5", "10,11,14,15", "2", "3", "6", "7", "8", "9", "12", "13"],
-    5: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
-}
-
-@app.route("/coverart/grid-stats/<user_name>/<range>/<int:dimension>/<int:image_size>", methods=["GET"])
-def cover_art_grid_stats(user_name, range, dimension, image_size):
+@app.route("/coverart/grid-stats/<user_name>/<range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
+def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
 
     release_mbids = download_user_stats(user_name, range)
     if len(release_mbids) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
-    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size, "black", True, "black")
-    tiles = []
-    for addr in TILE_DESIGNS[dimension]:
-        x1, y1, x2, y2 = cac.calculate_bounding_box(addr)
-        if x1 is None:
-            raise BadRequest(f"Invalid address {addr} specified.")
-        tiles.append((x1, y1, x2, y2))
+    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size, "black", True, "black", layout)
+    err = cac.validate_parameters()
+    if err is not None:
+        raise BadRequest(err)
 
-    image = cac.create_grid(release_mbids, tiles)
+    image = cac.create_grid(release_mbids)
     if image is None:
         raise InternalServerError("Failed to create composite image.")
 
