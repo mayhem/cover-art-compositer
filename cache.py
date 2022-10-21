@@ -5,7 +5,7 @@ import os
 from time import sleep
 from uuid import UUID
 
-from flask import Flask, send_file, request, Response
+from flask import Flask, send_file, request, Response, render_template
 import psycopg2
 import psycopg2.extras
 from psycopg2.errors import OperationalError
@@ -349,7 +349,11 @@ class CoverArtCache:
         return obj
 
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder="template")
+
+@app.route("/")
+def index():
+    return render_template("index.html")
 
 @app.route("/coverart/grid/", methods=["POST"])
 def cover_art_grid_post():
