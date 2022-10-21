@@ -27,7 +27,7 @@ def create_font_template(file_name, font_name, font_file, font_size, width, heig
     """)
     # This should work stand alone and embedded in a website!
     paragraph = dwg.add(dwg.g(class_="fontyfont", ))
-    paragraph.add(dwg.text("lorem impsum rump", insert=(10, 40)))
+    paragraph.add(dwg.text("MICHAEL", insert=(0, 100)))
     dwg.save(pretty=True)
 
-create_font_template("designer.svg", "Inter", "Inter-V.ttf", 100, 750, 750)
+create_font_template("designer.svg", "Inter", "Inter-Black.otf", 100, 750, 750)
