@@ -10,36 +10,11 @@ import psycopg2
 import psycopg2.extras
 from psycopg2.errors import OperationalError
 import requests
-from wand.image import Image
-from wand.drawing import Drawing
 from werkzeug.exceptions import BadRequest, InternalServerError
 
 import config
 
-# Dimension 2:
-# 0  1
-# 2  3
-#
-# Dimension 3:
-# 0  1  2
-# 3  4  5
-# 6  7  8
-#
-# Dimension 4:
-# 0   1  2  3
-# 4   5  6  7
-# 8   9 10 11
-# 12 13 14 15
-#
-# Dimension 5:
-# 0   1  2  3  4
-# 5   6  7  8  9
-# 10 11 12 13 14
-# 15 16 17 18 19
-# 20 21 22 23 24
-
-
-class CoverArtCache:
+class CoverArtCompositor:
 
     MIN_IMAGE_SIZE = 128
     MAX_IMAGE_SIZE = 1024
@@ -95,7 +70,7 @@ class CoverArtCache:
         if self.background not in ("transparent", "white", "black") and bg_color is None:
             return f"background must be one of transparent, white, black or a color code #rrggbb, not {self.background}"
 
-        if self.image_size < CoverArtCache.MIN_IMAGE_SIZE or self.image_size > CoverArtCache.MAX_IMAGE_SIZE:
+        if self.image_size < CoverArtCompositor.MIN_IMAGE_SIZE or self.image_size > CoverArtCompositor.MAX_IMAGE_SIZE:
             return f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive."
 
         if not isinstance(self.skip_missing, bool):
@@ -128,17 +103,6 @@ class CoverArtCache:
 
         return (r, g, b)
 
-    def _cache_path(self, release_mbid):
-        """ Given a release_mbid, create the file system path to where the cover art should be saved and 
-            ensure that the directory for it exists. """
-
-        path = os.path.join(self.cache_dir, release_mbid[0], release_mbid[0:1], release_mbid[0:2])
-        try:
-            os.makedirs(path)
-        except FileExistsError:
-            pass
-        return os.path.join(path, release_mbid + ".jpg")
-
     def _get_caa_id(self, release_mbid):
         """ Fetch the CAA id for the front image for the given release_mbid """
 
@@ -159,81 +123,6 @@ class CoverArtCache:
                     return row["caa_id"]
                 else:
                     return None
-
-    def _download_file(self, url):
-        """ Download a file given a URL and return that file as file-like object. """
-
-        sleep_duration = 2
-        while True:
-            headers = {'User-Agent': 'ListenBrainz Cover Art Compositor ( rob@metabrainz.org )'}
-            r = requests.get(url, headers=headers)
-            if r.status_code == 200:
-                total = 0
-                obj = io.BytesIO()
-                for chunk in r:
-                    total += len(chunk)
-                    obj.write(chunk)
-                obj.seek(0, 0)
-                print("Loaded %d bytes" % total)
-                return obj, ""
-
-            if r.status_code in [403, 404]:
-                return None, f"Could not load resource: {r.status_code}."
-
-            if r.status_code == 429:
-                log("Exceeded rate limit. sleeping %d seconds." % sleep_duration)
-                sleep(sleep_duration)
-                sleep_duration *= 2
-                if sleep_duration > 100:
-                    return None, "Timeout loading image, due to 429"
-
-                continue
-
-            if r.status_code == 503:
-                log("Service not available. sleeping %d seconds." % sleep_duration)
-                sleep(sleep_duration)
-                sleep_duration *= 2
-                if sleep_duration > 100:
-                    return None, "Timeout loading image, 503"
-                continue
-
-            return None, "Unhandled status code: %d" % r.status_code
-
-    def _download_cover_art(self, release_mbid, cover_art_file):
-        """ The cover art for the given release mbid does not exist, so download it,
-            save a local copy of it. """
-
-        caa_id = self._get_caa_id(release_mbid)
-        if caa_id is None:
-            return "Could not find caa_id"
-
-        url = f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
-        print(url)
-        image, err = self._download_file(url)
-        if image is None:
-            print("Case 1");
-            return err
-
-        with open(cover_art_file, 'wb') as f:
-            f.write(image.read())
-
-        print("Case 2");
-        return None
-
-    def fetch(self, release_mbid):
-        """ Fetch the cover art for the given release_mbid and return a path to where the image
-            is located on the local fs. This function will check the local cache for the image and
-            if it does not exist, it will be fetched from the archive and chached locally. """
-
-        cover_art_file = self._cache_path(release_mbid)
-        if not os.path.exists(cover_art_file):
-            err = self._download_cover_art(release_mbid, cover_art_file)
-            print("Fetch", err)
-            if err is not None:
-                return None, err
-
-        return cover_art_file, ""
-
 
     def calculate_bounding_box(self, address):
         tiles = address.split(",")
@@ -279,26 +168,20 @@ class CoverArtCache:
 
         return (int(tile % self.dimension * self.tile_size), int(tile // self.dimension * self.tile_size))
 
-    def load_or_create_missing_cover_art_tile(self):
-        if self.missing_cover_art_tile is None:
-            match self.missing_art:
-                case "caa-image":
-                    jpg_obj = self._download_file(self.CAA_MISSING_IMAGE)
-                    self.missing_cover_art_tile = Image(file=jpg_obj)
-                    self.missing_cover_art_tile.resize(self.tile_size, self.tile_size)
-                case "background":
-                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size)
-                case "white":
-                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, background="white")
-                case "black":
-                    self.missing_cover_art_tile = Image(width=self.tile_size, height=self.tile_size, background="black")
 
-        return self.missing_cover_art_tile
+    def resolve_cover_art(self, release_mbid):
+        if release_mbid is None:
+            return None
+
+        caa_id = self._get_caa_id(release_mbid)
+        if caa_id is None:
+            return None
+
+        return f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
 
 
     def create_grid(self, mbids, tile_addrs=None):
 
-        composite = Image(height=self.image_size, width=self.image_size, background=self.background)
         if self.layout is not None:
             addrs = self.TILE_DESIGNS[self.dimension][self.layout]
         elif tile_addrs is None:
@@ -313,47 +196,31 @@ class CoverArtCache:
                 raise BadRequest(f"Invalid address {addr} specified.")
             tiles.append((x1, y1, x2, y2))
 
-        i = 0
+        images = []
         for x1, y1, x2, y2 in tiles:
-            i += 1
             while True:
                 try:
-                    mbid = mbids.pop(0)
+                    url = self.resolve_cover_art(mbids.pop(0))
+                    if url is None:
+                        if self.skip_missing:
+                            continue
+                        else:
+                            url = self.CAA_MISSING_IMAGE 
+                    break
                 except IndexError:
-                    cover_art = self.load_or_create_missing_cover_art_tile()
+                    url = self.CAA_MISSING_IMAGE 
+                    break
 
-                cover_art, err = self.fetch(mbid)
-                if cover_art is None:
-                    print(f"Could not fetch cover art for {mbid}: {err}")
-                    if self.skip_missing:
-                        print("Skip nmissing and try again")
-                        continue
+            images.append({ "x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1, "url": url})
 
-                    cover_art = self.load_or_create_missing_cover_art_tile()
-                break
-
-            # Check to see if we have a string with a filename or loaded/prepped image (for missing images)
-            if isinstance(cover_art, str):
-                cover = Image(filename=cover_art)
-                cover.resize(x2 - x1, y2 - y1)
-            else:
-                cover = cover_art
-
-            composite.composite(left=x1, top=y1, image=cover)
-
-        obj = io.BytesIO()
-        composite.format = 'jpeg'
-        composite.save(file=obj)
-        obj.seek(0, 0)
-
-        return obj
+        return images
 
 
 app = Flask(__name__, template_folder="template")
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", width="750", height="750")
 
 @app.route("/coverart/grid/", methods=["POST"])
 def cover_art_grid_post():
@@ -361,7 +228,7 @@ def cover_art_grid_post():
     r = request.json
 
     if "tiles" in r:
-        cac = CoverArtCache(config.CACHE_DIR, r["dimension"], r["image_size"],
+        cac = CoverArtCompositor(config.CACHE_DIR, r["dimension"], r["image_size"],
                             r["background"], r["skip-missing"], r["missing-art"])
         tiles = r["tiles"]
     else:
@@ -369,7 +236,7 @@ def cover_art_grid_post():
             layout = r["layout"]
         else:
             layout = 0
-        cac = CoverArtCache(config.CACHE_DIR, r["dimension"], r["image_size"],
+        cac = CoverArtCompositor(config.CACHE_DIR, r["dimension"], r["image_size"],
                             r["background"], r["skip-missing"], r["missing-art"], r["layout"])
         tiles = None
 
@@ -418,16 +285,17 @@ def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
     if len(release_mbids) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
-    cac = CoverArtCache(config.CACHE_DIR, dimension, image_size, "black", True, "black", layout)
+    cac = CoverArtCompositor(config.CACHE_DIR, dimension, image_size, "black", True, "black", layout)
     err = cac.validate_parameters()
     if err is not None:
         raise BadRequest(err)
 
-    image = cac.create_grid(release_mbids)
-    if image is None:
+    images = cac.create_grid(release_mbids)
+    if images is None:
         raise InternalServerError("Failed to create composite image.")
 
-    return Response(response=image, status=200, mimetype="image/jpeg")
+    return render_template("svg-templates/simple-grid.svg", images=images, width=image_size, height=image_size), \
+           200, {'Content-Type': 'image/svg+xml'}
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

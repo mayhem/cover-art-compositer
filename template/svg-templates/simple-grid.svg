@@ -1,0 +1,11 @@
+<svg version="1.1"
+     xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="{{ image_width }}" height="{{ image_height }}">
+     {% for image in images %}
+        <image x="{{ image.x }}"
+               y="{{ image.y }}"
+               width="{{ image.width }}"
+               height="{{ image.height }}" 
+               xlink:href="{{ image.url }}"/>
+     {% endfor %}
+</svg>
