@@ -14,6 +14,7 @@ from werkzeug.exceptions import BadRequest, InternalServerError
 
 import config
 
+
 class CoverArtCompositor:
 
     MIN_IMAGE_SIZE = 128
@@ -22,24 +23,24 @@ class CoverArtCompositor:
 
     TILE_DESIGNS = {
         2: [
-                ["0", "1", "2", "3"],
-           ],
+            ["0", "1", "2", "3"],
+        ],
         3: [
-                ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
-                ["0,1,3,4", "2", "5", "6", "7", "8"],
-                ["0", "1", "2", "3", "4,5,7,8", "6"],
-           ],
+            ["0", "1", "2", "3", "4", "5", "6", "7", "8"],
+            ["0,1,3,4", "2", "5", "6", "7", "8"],
+            ["0", "1", "2", "3", "4,5,7,8", "6"],
+        ],
         4: [
-                ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"],
-                ["5,6,9,10", "0", "1", "2", "3", "4", "7", "8", "11", "12", "13", "14", "15"],
-                ["0,1,4,5", "10,11,14,15", "2", "3", "6", "7", "8", "9", "12", "13"],
-                ["0,1,2,4,5,6,8,9,10", "3", "7", "11", "12", "13", "14", "15"],
-           ],
-        5: [    
-                ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
-                 "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"],
-                ["0,1,2,5,6,7,10,11,12", "3,4,8,9", "15,16,20,21", "13", "14", "17", "18", "19", "22", "23", "24"]
-           ]
+            ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"],
+            ["5,6,9,10", "0", "1", "2", "3", "4", "7", "8", "11", "12", "13", "14", "15"],
+            ["0,1,4,5", "10,11,14,15", "2", "3", "6", "7", "8", "9", "12", "13"],
+            ["0,1,2,4,5,6,8,9,10", "3", "7", "11", "12", "13", "14", "15"],
+        ],
+        5: [
+            ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13",
+             "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"],
+            ["0,1,2,5,6,7,10,11,12", "3,4,8,9", "15,16,20,21", "13", "14", "17", "18", "19", "22", "23", "24"]
+        ]
     }
 
     def __init__(self, cache_dir, dimension, image_size, background="#000000",
@@ -52,7 +53,7 @@ class CoverArtCompositor:
         self.missing_art = missing_art
         self.missing_cover_art_tile = None
         self.layout = layout
-        self.tile_size = image_size // dimension # This will likely need more cafeful thought due to round off errors
+        self.tile_size = image_size // dimension  # This will likely need more cafeful thought due to round off errors
 
     def validate_parameters(self):
         """ Validate the parameters for the cover art designs. """
@@ -80,7 +81,6 @@ class CoverArtCompositor:
             return "missing-art option must be one of caa-image, background, white or black."
 
         return None
-
 
     def _parse_color_code(self, color_code):
         if not color_code.startswith("#"):
@@ -159,7 +159,6 @@ class CoverArtCompositor:
 
         return (bb_x1, bb_y1, bb_x2, bb_y2)
 
-
     def get_tile_position(self, tile):
         """ Calculate the position of a given tile, return (x, y) """
 
@@ -167,7 +166,6 @@ class CoverArtCompositor:
             return (None, None)
 
         return (int(tile % self.dimension * self.tile_size), int(tile // self.dimension * self.tile_size))
-
 
     def resolve_cover_art(self, release_mbid):
         if release_mbid is None:
@@ -178,7 +176,6 @@ class CoverArtCompositor:
             return None
 
         return f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
-
 
     def create_grid(self, mbids, tile_addrs=None):
 
@@ -205,22 +202,24 @@ class CoverArtCompositor:
                         if self.skip_missing:
                             continue
                         else:
-                            url = self.CAA_MISSING_IMAGE 
+                            url = self.CAA_MISSING_IMAGE
                     break
                 except IndexError:
-                    url = self.CAA_MISSING_IMAGE 
+                    url = self.CAA_MISSING_IMAGE
                     break
 
-            images.append({ "x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1, "url": url})
+            images.append({"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1, "url": url})
 
         return images
 
 
 app = Flask(__name__, template_folder="template", static_folder="static", static_url_path="/static")
 
+
 @app.route("/")
 def index():
     return render_template("index.html", width="750", height="750")
+
 
 @app.route("/coverart/grid/", methods=["POST"])
 def cover_art_grid_post():
@@ -229,7 +228,7 @@ def cover_art_grid_post():
 
     if "tiles" in r:
         cac = CoverArtCompositor(config.CACHE_DIR, r["dimension"], r["image_size"],
-                            r["background"], r["skip-missing"], r["missing-art"])
+                                 r["background"], r["skip-missing"], r["missing-art"])
         tiles = r["tiles"]
     else:
         if "layout" in r:
@@ -237,7 +236,7 @@ def cover_art_grid_post():
         else:
             layout = 0
         cac = CoverArtCompositor(config.CACHE_DIR, r["dimension"], r["image_size"],
-                            r["background"], r["skip-missing"], r["missing-art"], r["layout"])
+                                 r["background"], r["skip-missing"], r["missing-art"], r["layout"])
         tiles = None
 
     err = cac.validate_parameters()
@@ -259,13 +258,14 @@ def cover_art_grid_post():
 
     return Response(response=image, status=200, mimetype="image/jpeg")
 
+
 def download_user_stats(user_name, date_range):
 
     if date_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time', 'this_week', 'this_month', 'this_year']:
         raise BadRequest("Invalid date range given.")
 
     url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/releases"
-    r = requests.get(url, { "range": date_range, "count": 100 })
+    r = requests.get(url, {"range": date_range, "count": 100})
     if r.status_code != 200:
         raise BadRequest("Fetching stats for user {user_name} failed: %d" % r.status_code)
 
@@ -275,13 +275,13 @@ def download_user_stats(user_name, date_range):
         if d["release_mbid"] is not None:
             mbids.append(d["release_mbid"])
 
-    return mbids
+    return mbids, data
 
 
 @app.route("/coverart/grid-stats/<user_name>/<range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
 def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
 
-    release_mbids = download_user_stats(user_name, range)
+    release_mbids, stats = download_user_stats(user_name, range)
     if len(release_mbids) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
@@ -295,16 +295,16 @@ def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
         raise InternalServerError("Failed to create composite image.")
 
     return render_template("svg-templates/simple-grid.svg", images=images, width=image_size, height=image_size), \
-           200, {'Content-Type': 'image/svg+xml'}
+        200, {'Content-Type': 'image/svg+xml'}
 
 
 @app.route("/coverart/<custom_name>/<user_name>/<range>/<int:image_size>", methods=["GET"])
 def cover_art_custom_stats(custom_name, user_name, range, image_size):
 
-    if custom_name not in ("cover-art-on-floor"):
+    if custom_name not in ("cover-art-on-floor", "designer"):
         raise BadRequest(f"Unkown custom cover art type {custom_name}")
 
-    release_mbids = download_user_stats(user_name, range)
+    release_mbids, stats = download_user_stats(user_name, range)
     if len(release_mbids) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
@@ -317,8 +317,8 @@ def cover_art_custom_stats(custom_name, user_name, range, image_size):
     if images is None:
         raise InternalServerError("Failed to create composite image.")
 
-    return render_template(f"svg-templates/{custom_name}.svg", images=images, width=image_size, height=image_size), \
-           200, {'Content-Type': 'image/svg+xml'}
+    return render_template(f"svg-templates/{custom_name}.svg", images=images, stats=stats, width=image_size, height=image_size), 200, {'Content-Type': 'image/svg+xml'}
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
