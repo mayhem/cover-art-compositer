@@ -275,13 +275,13 @@ def download_user_stats(user_name, date_range):
         if d["release_mbid"] is not None:
             mbids.append(d["release_mbid"])
 
-    return mbids, data
+    return mbids, data["payload"]["releases"]
 
 
 @app.route("/coverart/grid-stats/<user_name>/<range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
 def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
 
-    release_mbids, stats = download_user_stats(user_name, range)
+    release_mbids, _ = download_user_stats(user_name, range)
     if len(release_mbids) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
@@ -304,7 +304,7 @@ def cover_art_custom_stats(custom_name, user_name, range, image_size):
     if custom_name not in ("cover-art-on-floor", "designer"):
         raise BadRequest(f"Unkown custom cover art type {custom_name}")
 
-    release_mbids, stats = download_user_stats(user_name, range)
+    release_mbids, releases = download_user_stats(user_name, range)
     if len(release_mbids) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
@@ -317,7 +317,7 @@ def cover_art_custom_stats(custom_name, user_name, range, image_size):
     if images is None:
         raise InternalServerError("Failed to create composite image.")
 
-    return render_template(f"svg-templates/{custom_name}.svg", images=images, stats=stats, width=image_size, height=image_size), 200, {'Content-Type': 'image/svg+xml'}
+    return render_template(f"svg-templates/{custom_name}.svg", images=images, releases=releases, width=image_size, height=image_size), 200, {'Content-Type': 'image/svg+xml'}
 
 
 if __name__ == '__main__':
