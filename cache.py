@@ -216,7 +216,7 @@ class CoverArtCompositor:
         return images
 
 
-app = Flask(__name__, template_folder="template")
+app = Flask(__name__, template_folder="template", static_folder="static", static_url_path="/static")
 
 @app.route("/")
 def index():
@@ -295,6 +295,29 @@ def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
         raise InternalServerError("Failed to create composite image.")
 
     return render_template("svg-templates/simple-grid.svg", images=images, width=image_size, height=image_size), \
+           200, {'Content-Type': 'image/svg+xml'}
+
+
+@app.route("/coverart/<custom_name>/<user_name>/<range>/<int:image_size>", methods=["GET"])
+def cover_art_custom_stats(custom_name, user_name, range, image_size):
+
+    if custom_name not in ("cover-art-on-floor"):
+        raise BadRequest(f"Unkown custom cover art type {custom_name}")
+
+    release_mbids = download_user_stats(user_name, range)
+    if len(release_mbids) == 0:
+        raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
+
+    cac = CoverArtCompositor(config.CACHE_DIR, 3, image_size, "black", True, "black")
+    err = cac.validate_parameters()
+    if err is not None:
+        raise BadRequest(err)
+
+    images = cac.create_grid(release_mbids)
+    if images is None:
+        raise InternalServerError("Failed to create composite image.")
+
+    return render_template(f"svg-templates/{custom_name}.svg", images=images, width=image_size, height=image_size), \
            200, {'Content-Type': 'image/svg+xml'}
 
 if __name__ == '__main__':
