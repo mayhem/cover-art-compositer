@@ -316,13 +316,13 @@ def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
 @app.route("/coverart/<custom_name>/<user_name>/<time_range>/<int:image_size>", methods=["GET"])
 def cover_art_custom_stats(custom_name, user_name, time_range, image_size):
 
-    if custom_name not in ("lps-on-the-floor", "designer-top-5", "designer-top-10"):
+    if custom_name not in ("lps-on-the-floor", "designer-top-5", "designer-top-10", "designer-top-10-alt"):
         raise BadRequest(f"Unkown custom cover art type {custom_name}")
 
     if custom_name in ("designer-top-5"):
         return custom_artist_cover_art(custom_name, user_name, time_range, image_size)
 
-    if custom_name in ("lps-on-the-floor", "designer-top-10"):
+    if custom_name in ("lps-on-the-floor", "designer-top-10", "designer-top-10-alt"):
         return custom_release_cover_art(custom_name, user_name, time_range, image_size)
 
 def custom_release_cover_art(custom_name, user_name, time_range, image_size):
