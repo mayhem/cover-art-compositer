@@ -12,8 +12,14 @@
         font-size: 100;
     }
     ]]></style>
-  </defs>
+  </defs> 
   <g class="fontyfont">
-    <text x="0" y="100">MICHAEL</text>
+  {% for artist in artists[:5] %}
+        <text x="0" y="{{ loop.index * 100}}">{{ artist.artist_name|upper|e }}</text>
+  {% endfor %}
+    <text x="0" y="50">{{ metadata["user_name"]|upper|e }}</text>
+    <text x="400" y="50">{{ metadata["date"] }}</text>
+    <text x="0" y="600">TOP FIVE ARTISTS LAST {{ metadata["time_range"]|upper|e }}</text>
+    <text x="400" y="600">{{ metadata["num_artists"] }} ARTISTS</text>
   </g>
 </svg>

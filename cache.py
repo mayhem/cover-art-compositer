@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import datetime
 import io
 import os
 from time import sleep
@@ -259,31 +259,30 @@ def cover_art_grid_post():
     return Response(response=image, status=200, mimetype="image/jpeg")
 
 
-def download_user_stats(user_name, date_range):
+def download_user_stats(entity, user_name, date_range):
 
     if date_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time', 'this_week', 'this_month', 'this_year']:
         raise BadRequest("Invalid date range given.")
 
-    url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/releases"
+    if entity not in ("artists", "releases", "recordings"):
+        raise BadRequest("Stats entity must be one of artist, release or recording.")
+
+    url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/{entity}"
     r = requests.get(url, {"range": date_range, "count": 100})
     if r.status_code != 200:
         raise BadRequest("Fetching stats for user {user_name} failed: %d" % r.status_code)
 
-    data = r.json()
-    mbids = []
-    for d in data["payload"]["releases"]:
-        if d["release_mbid"] is not None:
-            mbids.append(d["release_mbid"])
-
-    return mbids, data["payload"]["releases"]
+    return r.json()["payload"][entity]
 
 
 @app.route("/coverart/grid-stats/<user_name>/<range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
 def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
 
-    release_mbids, _ = download_user_stats(user_name, range)
-    if len(release_mbids) == 0:
+    releases = download_user_stats("releases", user_name, time_range)
+    if len(releases) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
+
+    release_mbids = [ r["release_mbid"] for r in releases ]  
 
     cac = CoverArtCompositor(config.CACHE_DIR, dimension, image_size, "black", True, "black", layout)
     err = cac.validate_parameters()
@@ -298,15 +297,23 @@ def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
         200, {'Content-Type': 'image/svg+xml'}
 
 
-@app.route("/coverart/<custom_name>/<user_name>/<range>/<int:image_size>", methods=["GET"])
-def cover_art_custom_stats(custom_name, user_name, range, image_size):
+@app.route("/coverart/<custom_name>/<user_name>/<time_range>/<int:image_size>", methods=["GET"])
+def cover_art_custom_stats(custom_name, user_name, time_range, image_size):
 
     if custom_name not in ("cover-art-on-floor", "designer"):
         raise BadRequest(f"Unkown custom cover art type {custom_name}")
 
-    release_mbids, releases = download_user_stats(user_name, range)
-    if len(release_mbids) == 0:
+    if custom_name in ("designer"):
+        return custom_artist_cover_art(custom_name, user_name, time_range, image_size)
+
+    if custom_name in ("cover-art-on-floor"):
+        return custom_release_cover_art(custom_name, user_name, time_range, image_size)
+
+def custom_release_cover_art(custom_name, user_name, time_range, image_size):
+    releases = download_user_stats("releases", user_name, time_range)
+    if len(releases) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
+    release_mbids = [ r["release_mbid"] for r in releases ]  
 
     cac = CoverArtCompositor(config.CACHE_DIR, 3, image_size, "black", True, "black")
     err = cac.validate_parameters()
@@ -317,8 +324,30 @@ def cover_art_custom_stats(custom_name, user_name, range, image_size):
     if images is None:
         raise InternalServerError("Failed to create composite image.")
 
-    return render_template(f"svg-templates/{custom_name}.svg", images=images, releases=releases, width=image_size, height=image_size), 200, {'Content-Type': 'image/svg+xml'}
+    metadata = { "user_name": user_name,
+                 "date": datetime.datetime.now().strftime("%Y-%m-%d"), 
+                 "time_range": time_range }
+    return render_template(f"svg-templates/{custom_name}.svg", 
+                           images=images,
+                           releases=releases,
+                           width=image_size,
+                           height=image_size,
+                           metadata=metadata), 200, {'Content-Type': 'image/svg+xml'}
 
+def custom_artist_cover_art(custom_name, user_name, time_range, image_size):
+    artists = download_user_stats("artists", user_name, time_range)
+    if len(artists) == 0:
+        raise BadRequest(f"user {user_name} does not have any artists we can fetch. :(")
+
+    metadata = { "user_name": user_name,
+                 "date": datetime.datetime.now().strftime("%Y-%m-%d"),
+                 "time_range": time_range,
+                 "num_artists": len(artists) }
+    return render_template(f"svg-templates/{custom_name}.svg", 
+                           artists=artists,
+                           width=image_size,
+                           height=image_size,
+                           metadata=metadata), 200, {'Content-Type': 'image/svg+xml'}
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
