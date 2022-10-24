@@ -6,6 +6,7 @@
                y="{{ image.y }}"
                width="{{ image.width }}"
                height="{{ image.height }}" 
+               preserveAspectRatio="xMidYMid slice"
                xlink:href="{{ image.url }}"/>
      {% endfor %}
 </svg>
