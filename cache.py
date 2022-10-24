@@ -264,21 +264,22 @@ def download_user_stats(entity, user_name, date_range):
     if date_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time', 'this_week', 'this_month', 'this_year']:
         raise BadRequest("Invalid date range given.")
 
-    if entity not in ("artists", "releases", "recordings"):
+    if entity not in ("artist", "release", "recording"):
         raise BadRequest("Stats entity must be one of artist, release or recording.")
 
-    url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/{entity}"
+    url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/{entity}s"
     r = requests.get(url, {"range": date_range, "count": 100})
     if r.status_code != 200:
         raise BadRequest("Fetching stats for user {user_name} failed: %d" % r.status_code)
 
-    return r.json()["payload"][entity]
+    data = r.json()["payload"]
+    return data[entity + "s"], data[f"total_{entity}_count"]
 
 
-@app.route("/coverart/grid-stats/<user_name>/<range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
-def cover_art_grid_stats(user_name, range, dimension, layout, image_size):
+@app.route("/coverart/grid-stats/<user_name>/<time_range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
+def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
 
-    releases = download_user_stats("releases", user_name, time_range)
+    releases, _ = download_user_stats("release", user_name, time_range)
     if len(releases) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
@@ -310,7 +311,7 @@ def cover_art_custom_stats(custom_name, user_name, time_range, image_size):
         return custom_release_cover_art(custom_name, user_name, time_range, image_size)
 
 def custom_release_cover_art(custom_name, user_name, time_range, image_size):
-    releases = download_user_stats("releases", user_name, time_range)
+    releases, total_count = download_user_stats("release", user_name, time_range)
     if len(releases) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
     release_mbids = [ r["release_mbid"] for r in releases ]  
@@ -326,7 +327,8 @@ def custom_release_cover_art(custom_name, user_name, time_range, image_size):
 
     metadata = { "user_name": user_name,
                  "date": datetime.datetime.now().strftime("%Y-%m-%d"), 
-                 "time_range": time_range }
+                 "time_range": time_range,
+                 "num_releases": total_count }
     return render_template(f"svg-templates/{custom_name}.svg", 
                            images=images,
                            releases=releases,
@@ -335,14 +337,14 @@ def custom_release_cover_art(custom_name, user_name, time_range, image_size):
                            metadata=metadata), 200, {'Content-Type': 'image/svg+xml'}
 
 def custom_artist_cover_art(custom_name, user_name, time_range, image_size):
-    artists = download_user_stats("artists", user_name, time_range)
+    artists, total_count = download_user_stats("artist", user_name, time_range)
     if len(artists) == 0:
         raise BadRequest(f"user {user_name} does not have any artists we can fetch. :(")
 
     metadata = { "user_name": user_name,
                  "date": datetime.datetime.now().strftime("%Y-%m-%d"),
                  "time_range": time_range,
-                 "num_artists": len(artists) }
+                 "num_artists": total_count }
     return render_template(f"svg-templates/{custom_name}.svg", 
                            artists=artists,
                            width=image_size,
