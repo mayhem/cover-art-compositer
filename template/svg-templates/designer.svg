@@ -24,7 +24,7 @@
  <g clip-path="url(#clip)" letter-spacing="0em" font-weight="900" font-family="Inter, sans-serif" fill="#321529">
   <g font-size="20px">
    <text id="user_name"><tspan id="tspan6" y="36" x="22">{{ metadata["user_name"]|upper|e }}</tspan></text>
-   <text id="text8"><tspan id="tspan10" y="894" x="22">TOP FIVE ARTISTS LAST {{ metadata["time_range"]|upper|e }}</tspan></text>
+   <text id="text8"><tspan id="tspan10" y="894" x="22">TOP FIVE ARTISTS {{ metadata["time_range"]|upper|e }}</tspan></text>
    <text id="number_of_artists"><tspan id="tspan14" y="894" x="769">{{ metadata["num_artists"] }} ARTISTS</tspan></text>
    <text id="date"><tspan id="tspan18" y="36" x="773">{{ metadata["date"] }}</tspan></text>
   </g>

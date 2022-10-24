@@ -14,6 +14,15 @@ from werkzeug.exceptions import BadRequest, InternalServerError
 
 import config
 
+time_range_to_english = { "week": "last week",
+                          "month": "last month", 
+                          "quarter": "last quarter", 
+                          "half_yearly": "last 6 months",
+                          "year": "last year",
+                          "all_time": "all time",
+                          "this_week": "this week",
+                          "this_month": "this month",
+                          "this_year": "this year" }
 
 class CoverArtCompositor:
 
@@ -327,7 +336,7 @@ def custom_release_cover_art(custom_name, user_name, time_range, image_size):
 
     metadata = { "user_name": user_name,
                  "date": datetime.datetime.now().strftime("%Y-%m-%d"), 
-                 "time_range": time_range,
+                 "time_range": time_range_to_english[time_range],
                  "num_releases": total_count }
     return render_template(f"svg-templates/{custom_name}.svg", 
                            images=images,
@@ -343,7 +352,7 @@ def custom_artist_cover_art(custom_name, user_name, time_range, image_size):
 
     metadata = { "user_name": user_name,
                  "date": datetime.datetime.now().strftime("%Y-%m-%d"),
-                 "time_range": time_range,
+                 "time_range": time_range_to_english[time_range],
                  "num_artists": total_count }
     return render_template(f"svg-templates/{custom_name}.svg", 
                            artists=artists,
