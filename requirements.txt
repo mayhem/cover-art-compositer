@@ -3,4 +3,3 @@ psycopg2-binary
 ujson==5.4.0
 requests
 Flask==2.1.2
-svgwrite==1.4.3

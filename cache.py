@@ -144,8 +144,13 @@ class CoverArtCompositor:
 
         x1 = int(x * self.tile_size)
         y1 = int(y * self.tile_size)
-        x2 = int((x+1) * self.tile_size) - 1
-        y2 = int((y+1) * self.tile_size) - 1
+        x2 = int((x+1) * self.tile_size)
+        y2 = int((y+1) * self.tile_size)
+
+        if x == self.dimension - 1:
+            x2 = self.image_size - 1
+        if y == self.dimension - 1:
+            y2 = self.image_size - 1
 
         return (x1, y1, x2, y2)
 
