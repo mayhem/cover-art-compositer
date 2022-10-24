@@ -19,7 +19,7 @@ time_range_to_english = { "week": "last week",
                           "quarter": "last quarter", 
                           "half_yearly": "last 6 months",
                           "year": "last year",
-                          "all_time": "all time",
+                          "all_time": "of all time",
                           "this_week": "this week",
                           "this_month": "this month",
                           "this_year": "this year" }
@@ -133,6 +133,22 @@ class CoverArtCompositor:
                 else:
                     return None
 
+    def get_tile_position(self, tile):
+        """ Calculate the position of a given tile, return (x, y) """
+
+        if tile < 0 or tile >= self.dimension * self.dimension:
+            return (None, None)
+
+        x = tile % self.dimension
+        y = tile // self.dimension
+
+        x1 = int(x * self.tile_size)
+        y1 = int(y * self.tile_size)
+        x2 = int((x+1) * self.tile_size) - 1
+        y2 = int((y+1) * self.tile_size) - 1
+
+        return (x1, y1, x2, y2)
+
     def calculate_bounding_box(self, address):
         tiles = address.split(",")
         try:
@@ -146,9 +162,7 @@ class CoverArtCompositor:
                 return (None, None, None, None)
 
         for i, tile in enumerate(tiles):
-            x1, y1 = self.get_tile_position(tile)
-            x2 = x1 + self.tile_size
-            y2 = y1 + self.tile_size
+            x1, y1, x2, y2 = self.get_tile_position(tile)
 
             if i == 0:
                 bb_x1 = x1
@@ -167,14 +181,6 @@ class CoverArtCompositor:
             bb_y2 = max(bb_y2, y2)
 
         return (bb_x1, bb_y1, bb_x2, bb_y2)
-
-    def get_tile_position(self, tile):
-        """ Calculate the position of a given tile, return (x, y) """
-
-        if tile < 0 or tile >= self.dimension * self.dimension:
-            return (None, None)
-
-        return (int(tile % self.dimension * self.tile_size), int(tile // self.dimension * self.tile_size))
 
     def resolve_cover_art(self, release_mbid):
         if release_mbid is None:
@@ -310,13 +316,13 @@ def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
 @app.route("/coverart/<custom_name>/<user_name>/<time_range>/<int:image_size>", methods=["GET"])
 def cover_art_custom_stats(custom_name, user_name, time_range, image_size):
 
-    if custom_name not in ("cover-art-on-floor", "designer"):
+    if custom_name not in ("lps-on-the-floor", "designer-top-5", "designer-top-10"):
         raise BadRequest(f"Unkown custom cover art type {custom_name}")
 
-    if custom_name in ("designer"):
+    if custom_name in ("designer-top-5"):
         return custom_artist_cover_art(custom_name, user_name, time_range, image_size)
 
-    if custom_name in ("cover-art-on-floor"):
+    if custom_name in ("lps-on-the-floor", "designer-top-10"):
         return custom_release_cover_art(custom_name, user_name, time_range, image_size)
 
 def custom_release_cover_art(custom_name, user_name, time_range, image_size):
