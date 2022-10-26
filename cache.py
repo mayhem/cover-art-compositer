@@ -361,6 +361,8 @@ def custom_artist_cover_art(custom_name, user_name, time_range, image_size):
     if len(artists) == 0:
         raise BadRequest(f"user {user_name} does not have any artists we can fetch. :(")
 
+    # TODO: Remove VA from this list
+
     metadata = { "user_name": user_name,
                  "date": datetime.datetime.now().strftime("%Y-%m-%d"),
                  "time_range": time_range_to_english[time_range],
