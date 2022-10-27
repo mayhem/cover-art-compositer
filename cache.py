@@ -14,23 +14,22 @@ from werkzeug.exceptions import BadRequest, InternalServerError
 
 import config
 
-time_range_to_english = { "week": "last week",
-                          "month": "last month", 
-                          "quarter": "last quarter", 
-                          "half_yearly": "last 6 months",
-                          "year": "last year",
-                          "all_time": "of all time",
-                          "this_week": "this week",
-                          "this_month": "this month",
-                          "this_year": "this year" }
 
-class CoverArtCompositor:
+class CoverArtGenerator:
+    """ Main engine for generating dynamic cover art. Given a design and data (e.g. stats) generate
+        cover art from cover art images or text using the SVG format. """
 
+    # Specify some operating limits
     MIN_IMAGE_SIZE = 128
     MAX_IMAGE_SIZE = 1024
     CAA_MISSING_IMAGE = "https://listenbrainz.org/static/img/cover-art-placeholder.jpg"
 
-    TILE_DESIGNS = {
+    # This grid tile designs (layouts?) are expressed as a dict with they key as dimension.
+    # The value of the dict defines one design, with each cell being able to specify one or
+    # more number of cells. Each string is a list of cells that will be used to define 
+    # the bounding box of these cells. The cover art in question will be placed inside this
+    # area.
+    GRID_TILE_DESIGNS = {
         2: [
             ["0", "1", "2", "3"],
         ],
@@ -52,9 +51,19 @@ class CoverArtCompositor:
         ]
     }
 
-    def __init__(self, cache_dir, dimension, image_size, background="#000000",
+    # Take time ranges and give correct english text
+    time_range_to_english = { "week": "last week",
+                              "month": "last month", 
+                              "quarter": "last quarter", 
+                              "half_yearly": "last 6 months",
+                              "year": "last year",
+                              "all_time": "of all time",
+                              "this_week": "this week",
+                              "this_month": "this month",
+                              "this_year": "this year" }
+
+    def __init__(self, dimension, image_size, background="#000000",
                  skip_missing=True, missing_art="caa-image", layout=None):
-        self.cache_dir = cache_dir
         self.dimension = dimension
         self.image_size = image_size
         self.background = background
@@ -64,34 +73,7 @@ class CoverArtCompositor:
         self.layout = layout
         self.tile_size = image_size // dimension  # This will likely need more cafeful thought due to round off errors
 
-    def validate_parameters(self):
-        """ Validate the parameters for the cover art designs. """
-
-        if self.dimension not in (2, 3, 4, 5):
-            return "dimmension must be between 2 and 5, inclusive."
-
-        if self.layout is not None:
-            try:
-                _ = self.TILE_DESIGNS[self.dimension][self.layout]
-            except IndexError:
-                return f"layout {self.layout} is not available for dimension {self.dimension}."
-
-        bg_color = self._parse_color_code(self.background)
-        if self.background not in ("transparent", "white", "black") and bg_color is None:
-            return f"background must be one of transparent, white, black or a color code #rrggbb, not {self.background}"
-
-        if self.image_size < CoverArtCompositor.MIN_IMAGE_SIZE or self.image_size > CoverArtCompositor.MAX_IMAGE_SIZE:
-            return f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive."
-
-        if not isinstance(self.skip_missing, bool):
-            return f"option skip-missing must be of type boolean."
-
-        if self.missing_art not in ("caa-image", "background", "white", "black"):
-            return "missing-art option must be one of caa-image, background, white or black."
-
-        return None
-
-    def _parse_color_code(self, color_code):
+    def parse_color_code(self, color_code):
         if not color_code.startswith("#"):
             return None
 
@@ -112,7 +94,35 @@ class CoverArtCompositor:
 
         return (r, g, b)
 
-    def _get_caa_id(self, release_mbid):
+    def validate_parameters(self):
+        """ Validate the parameters for the cover art designs. """
+
+        if self.dimension not in (2, 3, 4, 5):
+            return "dimmension must be between 2 and 5, inclusive."
+
+        if self.layout is not None:
+            try:
+                _ = self.GRID_TILE_DESIGNS[self.dimension][self.layout]
+            except IndexError:
+                return f"layout {self.layout} is not available for dimension {self.dimension}."
+
+        bg_color = self.parse_color_code(self.background)
+        if self.background not in ("transparent", "white", "black") and bg_color is None:
+            return f"background must be one of transparent, white, black or a color code #rrggbb, not {self.background}"
+
+        if self.image_size < CoverArtGenerator.MIN_IMAGE_SIZE or self.image_size > CoverArtGenerator.MAX_IMAGE_SIZE:
+            return f"image size must be between {self.MIN_IMAGE_SIZE} and {self.MAX_IMAGE_SIZE}, inclusive."
+
+        if not isinstance(self.skip_missing, bool):
+            return f"option skip-missing must be of type boolean."
+
+        if self.missing_art not in ("caa-image", "background", "white", "black"):
+            return "missing-art option must be one of caa-image, background, white or black."
+
+        return None
+
+
+    def get_caa_id(self, release_mbid):
         """ Fetch the CAA id for the front image for the given release_mbid """
 
         query = """SELECT caa.id AS caa_id
@@ -134,7 +144,9 @@ class CoverArtCompositor:
                     return None
 
     def get_tile_position(self, tile):
-        """ Calculate the position of a given tile, return (x, y) """
+        """ Calculate the position of a given tile, return (x1, y1, x2, y2). The math
+            in this setup may seem a bit wonky, but that is to ensure that we don't have
+            round-off errors that will manifest as line artifacts on the resultant covers"""
 
         if tile < 0 or tile >= self.dimension * self.dimension:
             return (None, None)
@@ -155,6 +167,8 @@ class CoverArtCompositor:
         return (x1, y1, x2, y2)
 
     def calculate_bounding_box(self, address):
+        """ Given a cell 'address' return its bounding box. """
+
         tiles = address.split(",")
         try:
             for i in range(len(tiles)):
@@ -188,21 +202,26 @@ class CoverArtCompositor:
         return (bb_x1, bb_y1, bb_x2, bb_y2)
 
     def resolve_cover_art(self, release_mbid):
+        """ Translate a release_mbid into a cover art URL. Return None if unresolvable. """
+
         if release_mbid is None:
             return None
 
-        caa_id = self._get_caa_id(release_mbid)
+        caa_id = self.get_caa_id(release_mbid)
         if caa_id is None:
             return None
 
         return f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
 
-    def create_grid(self, mbids, tile_addrs=None):
+    def create_cover(self, mbids, tile_addrs=None):
+        """ Given a list of MBIDs and optional tile addresses, resolve all the cover art design, all the
+            cover art to be used and then return the list of images and locations where they should be
+            placed. """
 
         if self.layout is not None:
-            addrs = self.TILE_DESIGNS[self.dimension][self.layout]
+            addrs = self.GRID_TILE_DESIGNS[self.dimension][self.layout]
         elif tile_addrs is None:
-            addrs = self.TILE_DESIGNS[self.dimension][0]
+            addrs = self.GRID_TILE_DESIGNS[self.dimension][0]
         else:
             addrs = tile_addrs
 
@@ -233,8 +252,57 @@ class CoverArtCompositor:
         return images
 
 
-app = Flask(__name__, template_folder="template", static_folder="static", static_url_path="/static")
+    def download_user_stats(self, entity, user_name, date_range):
 
+        if date_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time', 'this_week', 'this_month', 'this_year']:
+            raise BadRequest("Invalid date range given.")
+
+        if entity not in ("artist", "release", "recording"):
+            raise BadRequest("Stats entity must be one of artist, release or recording.")
+
+        url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/{entity}s"
+        r = requests.get(url, {"range": date_range, "count": 100})
+        if r.status_code != 200:
+            raise BadRequest("Fetching stats for user {user_name} failed: %d" % r.status_code)
+
+        data = r.json()["payload"]
+        return data[entity + "s"], data[f"total_{entity}_count"]
+
+
+    def create_artist_stats_cover(self, user_name, time_range):
+
+        artists, total_count = self.download_user_stats("artist", user_name, time_range)
+        if len(artists) == 0:
+            raise BadRequest(f"user {user_name} does not have any artists we can fetch. :(")
+
+        # TODO: Remove VA from this list
+
+        metadata = { "user_name": user_name,
+                     "date": datetime.datetime.now().strftime("%Y-%m-%d"),
+                     "time_range": self.time_range_to_english[time_range],
+                     "num_artists": total_count }
+        return artists, metadata
+
+    def create_release_stats_cover(self, user_name, time_range):
+
+        releases, total_count = self.download_user_stats("release", user_name, time_range)
+        if len(releases) == 0:
+            raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
+        release_mbids = [ r["release_mbid"] for r in releases ]  
+
+        images = self.create_cover(release_mbids)
+        if images is None:
+            raise InternalServerError("Failed to create composite image.")
+
+        metadata = { "user_name": user_name,
+                     "date": datetime.datetime.now().strftime("%Y-%m-%d"), 
+                     "time_range": self.time_range_to_english[time_range],
+                     "num_releases": total_count }
+
+        return images, releases, metadata
+
+
+app = Flask(__name__, template_folder="template", static_folder="static", static_url_path="/static")
 
 @app.route("/")
 def index():
@@ -247,16 +315,14 @@ def cover_art_grid_post():
     r = request.json
 
     if "tiles" in r:
-        cac = CoverArtCompositor(config.CACHE_DIR, r["dimension"], r["image_size"],
-                                 r["background"], r["skip-missing"], r["missing-art"])
+        cac = CoverArtGenerator(r["dimension"], r["image_size"], r["background"], r["skip-missing"], r["missing-art"])
         tiles = r["tiles"]
     else:
         if "layout" in r:
             layout = r["layout"]
         else:
             layout = 0
-        cac = CoverArtCompositor(config.CACHE_DIR, r["dimension"], r["image_size"],
-                                 r["background"], r["skip-missing"], r["missing-art"], r["layout"])
+        cac = CoverArtGenerator(r["dimension"], r["image_size"], r["background"], r["skip-missing"], r["missing-art"], r["layout"])
         tiles = None
 
     err = cac.validate_parameters()
@@ -272,45 +338,29 @@ def cover_art_grid_post():
         except ValueError:
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
-    image = cac.create_grid(r["release_mbids"], tiles)
+    image = cac.create_cover(r["release_mbids"], tiles)
     if image is None:
         raise InternalServerError("Failed to create composite image.")
 
     return Response(response=image, status=200, mimetype="image/jpeg")
 
 
-def download_user_stats(entity, user_name, date_range):
-
-    if date_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time', 'this_week', 'this_month', 'this_year']:
-        raise BadRequest("Invalid date range given.")
-
-    if entity not in ("artist", "release", "recording"):
-        raise BadRequest("Stats entity must be one of artist, release or recording.")
-
-    url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/{entity}s"
-    r = requests.get(url, {"range": date_range, "count": 100})
-    if r.status_code != 200:
-        raise BadRequest("Fetching stats for user {user_name} failed: %d" % r.status_code)
-
-    data = r.json()["payload"]
-    return data[entity + "s"], data[f"total_{entity}_count"]
-
-
 @app.route("/coverart/grid-stats/<user_name>/<time_range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
 def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
 
-    releases, _ = download_user_stats("release", user_name, time_range)
+    cac = CoverArtGenerator(dimension, image_size, "black", True, "black", layout)
+    err = cac.validate_parameters()
+    if err is not None:
+        raise BadRequest(err)
+
+    releases, _ = cac.download_user_stats("release", user_name, time_range)
     if len(releases) == 0:
         raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
 
     release_mbids = [ r["release_mbid"] for r in releases ]  
 
-    cac = CoverArtCompositor(config.CACHE_DIR, dimension, image_size, "black", True, "black", layout)
-    err = cac.validate_parameters()
-    if err is not None:
-        raise BadRequest(err)
 
-    images = cac.create_grid(release_mbids)
+    images = cac.create_cover(release_mbids)
     if images is None:
         raise InternalServerError("Failed to create composite image.")
 
@@ -321,57 +371,30 @@ def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
 @app.route("/coverart/<custom_name>/<user_name>/<time_range>/<int:image_size>", methods=["GET"])
 def cover_art_custom_stats(custom_name, user_name, time_range, image_size):
 
-    if custom_name not in ("lps-on-the-floor", "designer-top-5", "designer-top-10", "designer-top-10-alt"):
-        raise BadRequest(f"Unkown custom cover art type {custom_name}")
-
-    if custom_name in ("designer-top-5"):
-        return custom_artist_cover_art(custom_name, user_name, time_range, image_size)
-
-    if custom_name in ("lps-on-the-floor", "designer-top-10", "designer-top-10-alt"):
-        return custom_release_cover_art(custom_name, user_name, time_range, image_size)
-
-def custom_release_cover_art(custom_name, user_name, time_range, image_size):
-    releases, total_count = download_user_stats("release", user_name, time_range)
-    if len(releases) == 0:
-        raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
-    release_mbids = [ r["release_mbid"] for r in releases ]  
-
-    cac = CoverArtCompositor(config.CACHE_DIR, 3, image_size, "black", True, "black")
+    cac = CoverArtGenerator(3, image_size, "black", True, "black")
     err = cac.validate_parameters()
     if err is not None:
         raise BadRequest(err)
 
-    images = cac.create_grid(release_mbids)
-    if images is None:
-        raise InternalServerError("Failed to create composite image.")
+    if custom_name in ("designer-top-5"):
+        artists, metadata = cac.create_artist_stats_cover(user_name, time_range)
+        return render_template(f"svg-templates/{custom_name}.svg", 
+                               artists=artists,
+                               width=image_size,
+                               height=image_size,
+                               metadata=metadata), 200, {'Content-Type': 'image/svg+xml'}
 
-    metadata = { "user_name": user_name,
-                 "date": datetime.datetime.now().strftime("%Y-%m-%d"), 
-                 "time_range": time_range_to_english[time_range],
-                 "num_releases": total_count }
-    return render_template(f"svg-templates/{custom_name}.svg", 
-                           images=images,
-                           releases=releases,
-                           width=image_size,
-                           height=image_size,
-                           metadata=metadata), 200, {'Content-Type': 'image/svg+xml'}
+    if custom_name in ("lps-on-the-floor", "designer-top-10", "designer-top-10-alt"):
+        images, releases, metadata = cac.create_release_stats_cover(user_name, time_range)
+        return render_template(f"svg-templates/{custom_name}.svg", 
+                               images=images,
+                               releases=releases,
+                               width=image_size,
+                               height=image_size,
+                               metadata=metadata), 200, {'Content-Type': 'image/svg+xml'}
 
-def custom_artist_cover_art(custom_name, user_name, time_range, image_size):
-    artists, total_count = download_user_stats("artist", user_name, time_range)
-    if len(artists) == 0:
-        raise BadRequest(f"user {user_name} does not have any artists we can fetch. :(")
+    raise BadRequest(f"Unkown custom cover art type {custom_name}")
 
-    # TODO: Remove VA from this list
-
-    metadata = { "user_name": user_name,
-                 "date": datetime.datetime.now().strftime("%Y-%m-%d"),
-                 "time_range": time_range_to_english[time_range],
-                 "num_artists": total_count }
-    return render_template(f"svg-templates/{custom_name}.svg", 
-                           artists=artists,
-                           width=image_size,
-                           height=image_size,
-                           metadata=metadata), 200, {'Content-Type': 'image/svg+xml'}
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
