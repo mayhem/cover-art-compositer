@@ -63,14 +63,13 @@ class CoverArtGenerator:
                               "this_year": "this year" }
 
     def __init__(self, dimension, image_size, background="#000000",
-                 skip_missing=True, missing_art="caa-image", layout=None):
+                 skip_missing=True, missing_art="caa-image"):
         self.dimension = dimension
         self.image_size = image_size
         self.background = background
         self.skip_missing = skip_missing
         self.missing_art = missing_art
         self.missing_cover_art_tile = None
-        self.layout = layout
         self.tile_size = image_size // dimension  # This will likely need more cafeful thought due to round off errors
 
     def parse_color_code(self, color_code):
@@ -99,12 +98,6 @@ class CoverArtGenerator:
 
         if self.dimension not in (2, 3, 4, 5):
             return "dimmension must be between 2 and 5, inclusive."
-
-        if self.layout is not None:
-            try:
-                _ = self.GRID_TILE_DESIGNS[self.dimension][self.layout]
-            except IndexError:
-                return f"layout {self.layout} is not available for dimension {self.dimension}."
 
         bg_color = self.parse_color_code(self.background)
         if self.background not in ("transparent", "white", "black") and bg_color is None:
@@ -213,13 +206,13 @@ class CoverArtGenerator:
 
         return f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
 
-    def create_cover(self, mbids, tile_addrs=None):
+    def load_images(self, mbids, tile_addrs=None, layout=None):
         """ Given a list of MBIDs and optional tile addresses, resolve all the cover art design, all the
             cover art to be used and then return the list of images and locations where they should be
             placed. """
 
-        if self.layout is not None:
-            addrs = self.GRID_TILE_DESIGNS[self.dimension][self.layout]
+        if layout is not None:
+            addrs = self.GRID_TILE_DESIGNS[self.dimension][layout]
         elif tile_addrs is None:
             addrs = self.GRID_TILE_DESIGNS[self.dimension][0]
         else:
@@ -269,6 +262,18 @@ class CoverArtGenerator:
         return data[entity + "s"], data[f"total_{entity}_count"]
 
 
+    def create_grid_stats_cover(self, user_name, time_range, layout):
+        releases, _ = self.download_user_stats("release", user_name, time_range)
+        if len(releases) == 0:
+            raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
+
+        release_mbids = [ r["release_mbid"] for r in releases ]  
+        images = self.load_images(release_mbids, layout=layout)
+        if images is None:
+            raise InternalServerError("Failed to create composite image.")
+
+        return images, releases
+
     def create_artist_stats_cover(self, user_name, time_range):
 
         artists, total_count = self.download_user_stats("artist", user_name, time_range)
@@ -290,7 +295,7 @@ class CoverArtGenerator:
             raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
         release_mbids = [ r["release_mbid"] for r in releases ]  
 
-        images = self.create_cover(release_mbids)
+        images = self.load_images(release_mbids)
         if images is None:
             raise InternalServerError("Failed to create composite image.")
 
@@ -338,7 +343,7 @@ def cover_art_grid_post():
         except ValueError:
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
-    image = cac.create_cover(r["release_mbids"], tiles)
+    image = cac.load_images(r["release_mbids"], tile_addrs=tiles)
     if image is None:
         raise InternalServerError("Failed to create composite image.")
 
@@ -348,19 +353,17 @@ def cover_art_grid_post():
 @app.route("/coverart/grid-stats/<user_name>/<time_range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
 def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
 
-    cac = CoverArtGenerator(dimension, image_size, "black", True, "black", layout)
+    cac = CoverArtGenerator(dimension, image_size, "black", True, "black")
     err = cac.validate_parameters()
     if err is not None:
         raise BadRequest(err)
 
-    releases, _ = cac.download_user_stats("release", user_name, time_range)
-    if len(releases) == 0:
-        raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
+    try:
+        _ = cac.GRID_TILE_DESIGNS[dimension][layout]
+    except IndexError:
+        return f"layout {layout} is not available for dimension {dimension}."
 
-    release_mbids = [ r["release_mbid"] for r in releases ]  
-
-
-    images = cac.create_cover(release_mbids)
+    images, _ = cac.create_grid_stats_cover(user_name, time_range, layout)
     if images is None:
         raise InternalServerError("Failed to create composite image.")
 
