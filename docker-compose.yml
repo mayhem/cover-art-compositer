@@ -20,9 +20,9 @@ services:
     expose:
       - 8000
     environment:
-      - LETSENCRYPT_HOST=grid.listenbrainz.org
+      - LETSENCRYPT_HOST=art.listenbrainz.org
       - LETSENCRYPT_EMAIL=rob@metabrainz.org
-      - VIRTUAL_HOST=grid.listenbrainz.org
+      - VIRTUAL_HOST=art.listenbrainz.org
     networks:
       - musicbrainz-docker_default
       - production
