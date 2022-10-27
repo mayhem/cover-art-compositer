@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 import datetime
-import io
-import os
-from time import sleep
 from uuid import UUID
 
 from flask import Flask, send_file, request, Response, render_template
@@ -62,14 +59,13 @@ class CoverArtGenerator:
                               "this_month": "this month",
                               "this_year": "this year" }
 
-    def __init__(self, dimension, image_size, background="#000000",
-                 skip_missing=True, missing_art="caa-image"):
+    def __init__(self, dimension, image_size, background="#FFFFFF",
+                 skip_missing=True, show_caa_image_for_missing_covers=True):
         self.dimension = dimension
         self.image_size = image_size
         self.background = background
         self.skip_missing = skip_missing
-        self.missing_art = missing_art
-        self.missing_cover_art_tile = None
+        self.show_caa_image_for_missing_covers = show_caa_image_for_missing_covers
         self.tile_size = image_size // dimension  # This will likely need more cafeful thought due to round off errors
 
     def parse_color_code(self, color_code):
@@ -108,9 +104,6 @@ class CoverArtGenerator:
 
         if not isinstance(self.skip_missing, bool):
             return f"option skip-missing must be of type boolean."
-
-        if self.missing_art not in ("caa-image", "background", "white", "black"):
-            return "missing-art option must be one of caa-image, background, white or black."
 
         return None
 
@@ -230,17 +223,26 @@ class CoverArtGenerator:
             while True:
                 try:
                     url = self.resolve_cover_art(mbids.pop(0))
+                    color = None
                     if url is None:
                         if self.skip_missing:
                             continue
                         else:
-                            url = self.CAA_MISSING_IMAGE
+                            if self.show_caa_image_for_missing_covers:
+                                url = self.CAA_MISSING_IMAGE
+                            else:
+                                url = None
+
                     break
                 except IndexError:
-                    url = self.CAA_MISSING_IMAGE
+                    if self.show_caa_image_for_missing_covers:
+                        url = self.CAA_MISSING_IMAGE
+                    else:
+                        url = None
                     break
 
-            images.append({"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1, "url": url})
+            if url is not None:
+                images.append({"x": x1, "y": y1, "width": x2 - x1, "height": y2 - y1, "url": url})
 
         return images
 
@@ -320,14 +322,14 @@ def cover_art_grid_post():
     r = request.json
 
     if "tiles" in r:
-        cac = CoverArtGenerator(r["dimension"], r["image_size"], r["background"], r["skip-missing"], r["missing-art"])
+        cac = CoverArtGenerator(r["dimension"], r["image_size"], r["background"], r["skip-missing"], r["show-caa"])
         tiles = r["tiles"]
     else:
         if "layout" in r:
             layout = r["layout"]
         else:
             layout = 0
-        cac = CoverArtGenerator(r["dimension"], r["image_size"], r["background"], r["skip-missing"], r["missing-art"], r["layout"])
+        cac = CoverArtGenerator(r["dimension"], r["image_size"], r["background"], r["skip-missing"], r["show-caa"], r["layout"])
         tiles = None
 
     err = cac.validate_parameters()
@@ -343,17 +345,21 @@ def cover_art_grid_post():
         except ValueError:
             raise BadRequest(f"Invalid release_mbid {mbid} specified.")
 
-    image = cac.load_images(r["release_mbids"], tile_addrs=tiles)
-    if image is None:
-        raise InternalServerError("Failed to create composite image.")
+    images = cac.load_images(r["release_mbids"], tile_addrs=tiles)
+    if images is None:
+        raise InternalServerError("Failed to grid cover art SVG")
 
-    return Response(response=image, status=200, mimetype="image/jpeg")
+    return render_template("svg-templates/simple-grid.svg",
+                           background=r["background"],
+                           images=images,
+                           width=r["image_size"],
+                           height=r["image_size"]), 200, {'Content-Type': 'image/svg+xml'}
 
 
 @app.route("/coverart/grid-stats/<user_name>/<time_range>/<int:dimension>/<int:layout>/<int:image_size>", methods=["GET"])
 def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
 
-    cac = CoverArtGenerator(dimension, image_size, "black", True, "black")
+    cac = CoverArtGenerator(dimension, image_size)
     err = cac.validate_parameters()
     if err is not None:
         raise BadRequest(err)
@@ -367,14 +373,17 @@ def cover_art_grid_stats(user_name, time_range, dimension, layout, image_size):
     if images is None:
         raise InternalServerError("Failed to create composite image.")
 
-    return render_template("svg-templates/simple-grid.svg", images=images, width=image_size, height=image_size), \
-        200, {'Content-Type': 'image/svg+xml'}
+    return render_template("svg-templates/simple-grid.svg",
+                           background=cac.background,
+                           images=images,
+                           width=image_size,
+                           height=image_size), 200, {'Content-Type': 'image/svg+xml'}
 
 
 @app.route("/coverart/<custom_name>/<user_name>/<time_range>/<int:image_size>", methods=["GET"])
 def cover_art_custom_stats(custom_name, user_name, time_range, image_size):
 
-    cac = CoverArtGenerator(3, image_size, "black", True, "black")
+    cac = CoverArtGenerator(3, image_size)
     err = cac.validate_parameters()
     if err is not None:
         raise BadRequest(err)
