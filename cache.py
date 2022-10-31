@@ -69,6 +69,8 @@ class CoverArtGenerator:
         self.tile_size = image_size // dimension  # This will likely need more cafeful thought due to round off errors
 
     def parse_color_code(self, color_code):
+        """ Parse an HTML color code that starts with # and return a tuple(red, green, blue) """
+
         if not color_code.startswith("#"):
             return None
 
@@ -104,6 +106,9 @@ class CoverArtGenerator:
 
         if not isinstance(self.skip_missing, bool):
             return f"option skip-missing must be of type boolean."
+
+        if not isinstance(self.show_caa_image_for_missing_covers, bool):
+            return f"option show-caa must be of type boolean."
 
         return None
 
@@ -153,7 +158,8 @@ class CoverArtGenerator:
         return (x1, y1, x2, y2)
 
     def calculate_bounding_box(self, address):
-        """ Given a cell 'address' return its bounding box. """
+        """ Given a cell 'address' return its bounding box. An address is a list of comma separeated
+            grid cells, which taken collectively present a bounding box for a cover art image."""
 
         tiles = address.split(",")
         try:
@@ -187,8 +193,11 @@ class CoverArtGenerator:
 
         return (bb_x1, bb_y1, bb_x2, bb_y2)
 
-    def resolve_cover_art(self, release_mbid):
+    def resolve_cover_art(self, release_mbid, cover_art_size=500):
         """ Translate a release_mbid into a cover art URL. Return None if unresolvable. """
+
+        if cover_art_size not in (250, 500):
+            return None
 
         if release_mbid is None:
             return None
@@ -197,13 +206,14 @@ class CoverArtGenerator:
         if caa_id is None:
             return None
 
-        return f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb500.jpg"
+        return f"https://archive.org/download/mbid-{release_mbid}/mbid-{release_mbid}-{caa_id}_thumb{cover_art_size}.jpg"
 
     def load_images(self, mbids, tile_addrs=None, layout=None):
         """ Given a list of MBIDs and optional tile addresses, resolve all the cover art design, all the
             cover art to be used and then return the list of images and locations where they should be
-            placed. """
+            placed. Return an array of dicts containing the image coordinates and the URL of the image. """
 
+        # See if we're given a layout or a list of tile addresses
         if layout is not None:
             addrs = self.GRID_TILE_DESIGNS[self.dimension][layout]
         elif tile_addrs is None:
@@ -211,6 +221,7 @@ class CoverArtGenerator:
         else:
             addrs = tile_addrs
 
+        # Calculate the bounding boxes for each of the addresses
         tiles = []
         for addr in addrs:
             x1, y1, x2, y2 = self.calculate_bounding_box(addr)
@@ -218,6 +229,7 @@ class CoverArtGenerator:
                 raise BadRequest(f"Invalid address {addr} specified.")
             tiles.append((x1, y1, x2, y2))
 
+        # Now resolve cover art images into URLs and image dimensions
         images = []
         for x1, y1, x2, y2 in tiles:
             while True:
@@ -246,25 +258,28 @@ class CoverArtGenerator:
 
         return images
 
+    def download_user_stats(self, entity, user_name, time_range):
+        """ Given a user name, a stats entity and a stats time_range, return the stats dict from LB. """
 
-    def download_user_stats(self, entity, user_name, date_range):
-
-        if date_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time', 'this_week', 'this_month', 'this_year']:
+        if time_range not in ['week', 'month', 'quarter', 'half_yearly', 'year', 'all_time',
+                              'this_week', 'this_month', 'this_year']:
             raise BadRequest("Invalid date range given.")
 
         if entity not in ("artist", "release", "recording"):
             raise BadRequest("Stats entity must be one of artist, release or recording.")
 
         url = f"https://api.listenbrainz.org/1/stats/user/{user_name}/{entity}s"
-        r = requests.get(url, {"range": date_range, "count": 100})
+        r = requests.get(url, {"range": time_range, "count": 100})
         if r.status_code != 200:
             raise BadRequest("Fetching stats for user {user_name} failed: %d" % r.status_code)
 
         data = r.json()["payload"]
         return data[entity + "s"], data[f"total_{entity}_count"]
 
-
     def create_grid_stats_cover(self, user_name, time_range, layout):
+        """ Given a user name, stats time_range and a grid layout, return the array of
+            images for the grid and the stats that were downloaded for the grid. """
+
         releases, _ = self.download_user_stats("release", user_name, time_range)
         if len(releases) == 0:
             raise BadRequest(f"user {user_name} does not have any releases we can fetch. :(")
@@ -277,12 +292,13 @@ class CoverArtGenerator:
         return images, releases
 
     def create_artist_stats_cover(self, user_name, time_range):
+        """ Given a user name and a stats time range, make an artist stats cover. Return
+            the artist stats and metadata about this user/stats. The metadata dict contains
+            user_name, date, time_range and num_artists. """
 
         artists, total_count = self.download_user_stats("artist", user_name, time_range)
         if len(artists) == 0:
             raise BadRequest(f"user {user_name} does not have any artists we can fetch. :(")
-
-        # TODO: Remove VA from this list
 
         metadata = { "user_name": user_name,
                      "date": datetime.datetime.now().strftime("%Y-%m-%d"),
@@ -291,6 +307,10 @@ class CoverArtGenerator:
         return artists, metadata
 
     def create_release_stats_cover(self, user_name, time_range):
+        """ Given a user name and a stats time range, make an release stats cover. Return
+            the release stats and metadata about this user/stats. The metadata dict contains:
+            user_name, date, time_range and num_releases."""
+
 
         releases, total_count = self.download_user_stats("release", user_name, time_range)
         if len(releases) == 0:
