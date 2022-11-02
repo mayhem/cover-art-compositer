@@ -19,7 +19,7 @@
        {% for similar_user in similar_users %}
 
        <p style="font-size: 18pt">
-       User <b>{{ similar_user.user_name }}</b> is {{ similar_user.similarity }}% similar to {{ user_name }}.
+       User <b><a href="https://listenbrainz.org/user/{{ similar_user.user_name }}">{{ similar_user.user_name }}</a></b> is {{ similar_user.similarity }}% similar to {{ user_name }}.
        </p>
        <object data="https://art.listenbrainz.org/coverart/grid-stats/{{similar_user.user_name}}/{{time_range}}/4/2/{{ image_size }}"
                width="{{ image_size }}"
