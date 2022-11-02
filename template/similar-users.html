@@ -8,8 +8,10 @@
   <body style="margin: 2em">
  
       <h2>Visualise Similar Users to user {{ user_name }}</h2>
+      
+      <p><a href="/">back to index page</a></p>
 
-      <p>Selected time range: {{ time_range }}.
+      <p>Selected time range: {{ time_range }}.</p>
 
     {% if error %}
        <p>Error: {{ error }}</p>
@@ -30,6 +32,7 @@
        <br/>
 
        {% endfor %}
+       <p><a href="/">back to index page</a></p>
     {% endif %}
 
   </body>

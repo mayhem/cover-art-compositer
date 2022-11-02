@@ -11,12 +11,12 @@ networks:
 
 services:
 
-  caa-grid:
+  off-lb:
     build: .
     volumes:
       - caa-cache:/cache:z
     restart: unless-stopped 
-    command: python cache.py
+    command: python off_lb.py
     expose:
       - 8000
     environment:
