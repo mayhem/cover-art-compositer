@@ -1,0 +1,34 @@
+<html>
+  <head>
+   <title>Off ListenBrainz Nifty Features</title>
+   <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300italic,700,700italic">
+   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.css">
+   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/milligram/1.4.1/milligram.css">
+  </head>
+  <body style="margin: 2em">
+ 
+      <h2>Visualise Similar Users to user {{ user_name }}</h2>
+
+    {% if error %}
+       <p>Error: {{ error }}</p>
+    {% else %}
+       {% for similar_user in similar_users %}
+
+       <p style="font-size: 18pt">
+       User <b>{{ similar_user.user_name }}</b> is {{ similar_user.similarity }}% similar to {{ user_name }}.
+       </p>
+       <object data="https://art.listenbrainz.org/coverart/grid-stats/{{similar_user.user_name}}/{{time_range}}/4/2/{{ image_size }}"
+               width="{{ image_size }}"
+               height="{{ image_size }}">
+           [ if no image appears here, this user has not been listening to music in the selected time range {{ time_range }}.
+       </object>
+
+       <br/>
+       <br/>
+       <br/>
+
+       {% endfor %}
+    {% endif %}
+
+  </body>
+</html>
