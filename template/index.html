@@ -11,8 +11,14 @@
 
     <p>Enter a ListenBrainz user name and select a time range to visualise their similar users:</p>
     <form action="/similar-users" method="get">
-      <input type="text" name="user_name">
-      <input type="text" name="time_range">
+       user name<br/>
+       <input type="text" name="user_name" style="width: 300px"><br/>
+       time range<br/>
+      <select name="time_range" style="width: 300px">
+         {% for range in time_ranges %}
+         <option value="{{range}}">{{ range }}</option>
+         {% endfor %}
+      </select><br/>
       <input type="submit">
     </form>
 

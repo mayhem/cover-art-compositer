@@ -9,7 +9,7 @@ import config
 
 app = Flask(__name__, template_folder="template", static_folder="static", static_url_path="/static")
 
-time_ranges = ["week", "month", "quarter", "half_yearly", "year", "all_time", "this_week", "this_month", "this_year"]
+time_ranges = ["month", "week", "quarter", "half_yearly", "year", "all_time", "this_week", "this_month", "this_year"]
 
 
 @app.route("/", methods=["GET"])
