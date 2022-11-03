@@ -16,6 +16,18 @@
     {% if error %}
        <p>Error: {{ error }}</p>
     {% else %}
+       <p style="font-size: 18pt">
+       <b><a href="https://listenbrainz.org/user/{{ user_name }}">{{ user_name }}</a></b>:
+       </p>
+       <object data="https://art.listenbrainz.org/coverart/grid-stats/{{user_name}}/{{time_range}}/4/2/{{ image_size }}"
+               width="{{ image_size }}"
+               height="{{ image_size }}">
+           [ if no image appears here, this user has not been listening to music in the selected time range {{ time_range }}.
+       </object>
+       <br/>
+       <br/>
+       <br/>
+
        {% for similar_user in similar_users %}
 
        <p style="font-size: 18pt">
