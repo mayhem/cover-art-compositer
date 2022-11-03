@@ -17,7 +17,7 @@
        <p>Error: {{ error }}</p>
     {% else %}
        <p style="font-size: 18pt">
-       <b><a href="https://listenbrainz.org/user/{{ user_name }}">{{ user_name }}</a></b>:
+       User <b><a href="https://listenbrainz.org/user/{{ user_name }}">{{ user_name }}</a></b>:
        </p>
        <object data="https://art.listenbrainz.org/coverart/grid-stats/{{user_name}}/{{time_range}}/4/2/{{ image_size }}"
                width="{{ image_size }}"
